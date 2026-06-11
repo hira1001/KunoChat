@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 dirs = "5"
+futures-util = "0.3"
 open = "5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -31,6 +32,8 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 tauri-plugin-store = "2"
 tauri-plugin-window-state = "2"
+tokio = { version = "1", features = ["net", "sync", "time"] }
+tokio-tungstenite = "0.26"
 
 [features]
 default = ["custom-protocol"]

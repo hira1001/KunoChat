@@ -27,6 +27,8 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .setup(|app| {
+            native::signal_server::start(8787);
+            native::peer_discovery::start(app.handle().clone());
             native::tray::build_tray(app)?;
             native::shortcuts::register(app.handle())?;
             if let Some(window) = app.get_webview_window("main") {

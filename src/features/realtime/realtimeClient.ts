@@ -129,7 +129,8 @@ class KunoRealtimeClient {
       throw new Error("Realtime options are missing.");
     }
 
-    const socket = new WebSocket(runtimeConfig.signalingUrl);
+    const signalingUrl = this.options.signalingUrl ?? runtimeConfig.signalingUrl;
+    const socket = new WebSocket(signalingUrl);
     this.socket = socket;
 
     await new Promise<void>((resolve, reject) => {
@@ -150,7 +151,7 @@ class KunoRealtimeClient {
 
       socket.onerror = () => {
         window.clearTimeout(timer);
-        reject(new Error(`Cannot reach signaling server at ${runtimeConfig.signalingUrl}.`));
+        reject(new Error(`Cannot reach signaling server at ${signalingUrl}.`));
       };
     }).catch((error) => {
       this.callbacks?.onStatus("failed");

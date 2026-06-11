@@ -15,7 +15,8 @@
 
 ## Phase 3: Pairing
 
-- Add bundled WebSocket signaling as setup-only transport.
+- Add embedded WebSocket signaling as setup-only transport.
+- Add LAN auto-discovery so both users only open the app on the same network.
 - Generate pairing code and room ID.
 - Exchange offer/answer/ICE without sending content through signaling.
 

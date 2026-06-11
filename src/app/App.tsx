@@ -17,6 +17,13 @@ import { parseClipboardItems } from "../features/sendables/clipboardParser";
 import { parseDroppedFiles } from "../features/sendables/dropParser";
 import { listen } from "@tauri-apps/api/event";
 
+type AutoConnectPayload = {
+  signalingUrl: string;
+  roomId: string;
+  mode: "host" | "join";
+  peerHint: string;
+};
+
 export function App() {
   const {
     currentView,
@@ -47,6 +54,7 @@ export function App() {
   const pairingCode = useMemo(createPairingCode, []);
   const sessionPeerIdRef = useRef<string>();
   const hostedRoomRef = useRef<string>();
+  const autoConnectRef = useRef<string>();
   const typingStopTimerRef = useRef<number>();
   if (!sessionPeerIdRef.current) {
     sessionPeerIdRef.current = `${settings.localPeerId}_${crypto.randomUUID()}`;
@@ -145,6 +153,32 @@ export function App() {
       }),
       listen("kuno:send-clipboard", () => {
         setView("main");
+      }),
+      listen<AutoConnectPayload>("kuno:auto-connect", (event) => {
+        const sessionPeerId = sessionPeerIdRef.current;
+        if (!sessionPeerId) {
+          return;
+        }
+
+        const state = useChatStore.getState();
+        if (state.connectionStatus === "connected") {
+          return;
+        }
+
+        const key = `${event.payload.signalingUrl}:${event.payload.roomId}:${event.payload.mode}`;
+        if (autoConnectRef.current === key && state.connectionStatus === "connecting") {
+          return;
+        }
+
+        autoConnectRef.current = key;
+        setView("main");
+        void realtimeClient.connect({
+          roomId: event.payload.roomId,
+          localPeerId: sessionPeerId,
+          displayName: state.settings.displayName || "You",
+          mode: event.payload.mode,
+          signalingUrl: event.payload.signalingUrl
+        }).catch(() => undefined);
       })
     ];
 
@@ -317,7 +351,7 @@ export function App() {
           onDragLeave={handleDragLeave}
           onPaste={handlePaste}
         >
-          <Header status={connectionStatus} peerName={peerName} onMini={() => setView("mini")} onSettings={() => setView("settings")} />
+          <Header status={connectionStatus} peerName={peerName} onSettings={() => setView("settings")} />
           <MessageList messages={messages} connectionStatus={connectionStatus} peerName={peerName} showTyping={peerTyping} />
           <DropOverlay visible={isDraggingOver} />
           <AttachmentPreview attachments={attachments} onRemove={removeAttachment} />

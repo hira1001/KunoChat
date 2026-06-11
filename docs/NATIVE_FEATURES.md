@@ -6,6 +6,9 @@ KunoChat is designed as a native desktop companion for Windows and macOS. The cu
 
 - System tray/menu bar menu skeleton.
 - Single instance plugin registration.
+- Normal resizable/movable OS window with native decorations.
+- Embedded WebSocket signaling server that starts with the app.
+- LAN peer discovery for open-app-only connection on the same network.
 - Native file dialog adapter.
 - Native metadata and chunk-read commands for picker-selected files.
 - Native save command for received files under `Downloads/KunoChat`.
@@ -13,7 +16,7 @@ KunoChat is designed as a native desktop companion for Windows and macOS. The cu
 - Native notification command.
 - Global shortcut registration for show/hide, file picker, and clipboard-send entrypoints.
 - Autostart command.
-- Close-to-hide behavior for the main window.
+- Close/minimize behavior follows the native window first; tray hide behavior remains available through commands.
 - Window state plugin registration.
 - Store and SQL plugin registration.
 - Right-top window positioning command.

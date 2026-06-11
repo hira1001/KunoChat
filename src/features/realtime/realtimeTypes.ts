@@ -5,6 +5,7 @@ export type RealtimeConnectOptions = {
   localPeerId: string;
   displayName: string;
   mode: RealtimeConnectionMode;
+  signalingUrl?: string;
 };
 
 export type RealtimeTextPayload = {

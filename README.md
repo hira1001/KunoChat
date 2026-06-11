@@ -5,8 +5,8 @@ KunoChat is a tiny Windows/macOS desktop send pocket for two people. It is desig
 ## Principles
 
 - Free to operate: no paid TURN, hosted storage, or cloud database requirement.
-- No cloud file bodies: the WebSocket signaling server exchanges only pairing and WebRTC setup data; WebRTC DataChannel carries message bodies.
-- Native desktop feel: tray/menu bar, shortcuts, notifications, open/reveal, autostart, single instance, and window positioning.
+- No cloud file bodies: the embedded WebSocket signaling server exchanges only pairing and WebRTC setup data; WebRTC DataChannel carries message bodies.
+- Native desktop feel: normal resizable/movable OS window, optional always-on-top, tray/menu bar, shortcuts, notifications, open/reveal, autostart, single instance, and window positioning.
 - Speed first: text and control messages use an instant-priority control channel so large files never block quick chat updates.
 
 ## Stack
@@ -16,7 +16,8 @@ KunoChat is a tiny Windows/macOS desktop send pocket for two people. It is desig
 - Tailwind CSS
 - Zustand
 - WebRTC DataChannel instant text transport
-- Bundled WebSocket signaling server
+- Embedded WebSocket signaling server
+- LAN peer discovery
 - Local SQLite/store/files for history and received files
 
 ## Setup
@@ -28,31 +29,24 @@ curl --proto '=https' --tlsv1.2 https://sh.rustup.rs -sSf | sh
 npm install
 ```
 
-Copy `.env.example` to `.env` when changing the signaling URL:
+For normal installed-app use, no terminal server command is required. Open KunoChat on both computers on the same Wi-Fi/LAN; each app starts its embedded signaling server and discovers the other app automatically.
+
+Copy `.env.example` to `.env` only when changing development fallback URLs:
 
 ```sh
 cp .env.example .env
-```
-
-For two computers on the same Wi-Fi/LAN, run `npm run signal` on one computer and set both apps to that computer's LAN IP. Example when the signaling computer is `192.168.64.76`:
-
-```env
-VITE_SIGNALING_URL=ws://192.168.64.76:8787
-VITE_STUN_URL=stun:stun.l.google.com:19302
-SIGNALING_PORT=8787
 ```
 
 ## Development
 
 ```sh
 npm run dev
-npm run signal
 npm run typecheck
 npm run build
 npm run tauri:dev
 ```
 
-`npm run signal` starts the local signaling server on port `8787`. `npm run dev:full` starts signaling and Vite together on macOS or Windows. `npm run tauri:dev` requires Rust/Cargo and Tauri platform prerequisites.
+`npm run tauri:dev` runs the native app and starts the embedded signaling server automatically. `npm run signal` and `npm run dev:full` remain available only as web/development fallbacks for testing the standalone Node signaling relay.
 
 ## Production Build
 
@@ -61,7 +55,7 @@ npm run build
 npm run tauri:build
 ```
 
-The app builds as a native Tauri desktop bundle. Run a reachable signaling server and set `VITE_SIGNALING_URL` for live pairing across machines.
+The app builds as a native Tauri desktop bundle. The installed desktop app does not require `npm run signal`; on the same Wi-Fi/LAN, both users should only open KunoChat. A separate relay URL is only for future remote-network use when the two computers cannot see each other on LAN.
 
 ### Windows Prerequisites
 
@@ -80,11 +74,12 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 
 ## Implemented Now
 
-- Tauri v2 app metadata for `KunoChat` with a 360 x 560 frameless window.
+- Tauri v2 app metadata for `KunoChat` with a normal resizable/movable native window.
 - White, minimal Main Chat with Mini Pill, Pairing, Settings, composer, attachment preview, and drop overlay.
 - Mock-free startup: no fake conversation, no fake typing indicator, no fake connected peer.
-- Generated local pairing code with copy action and automatic room waiting.
-- Bundled WebSocket signaling server for room join, offer, answer, and ICE relay.
+- Generated local pairing code with copy action and automatic room waiting for manual fallback.
+- Embedded WebSocket signaling server for room join, offer, answer, and ICE relay.
+- LAN auto-discovery so two installed apps on the same network can connect without separate setup.
 - WebRTC `control` DataChannel for instant text, typing, ping/pong, and ACK.
 - WebRTC `binary` DataChannel for dropped/pasted file and image bodies.
 - Native path-backed reads for files selected with the `+` picker, tray Send File, or shortcut entrypoint.
@@ -105,7 +100,7 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 
 ## Next Phases
 
-1. Deploy the WebSocket signaling server behind TLS for remote networks.
+1. Add an optional public relay for remote networks where LAN discovery cannot see the other computer.
 2. Add reconnect/session resume and resend for interrupted connections.
 3. Add sha256 verification and retry/resume for interrupted asset transfers.
 4. Run two-machine flaky-network and NAT traversal tests, adding TURN only when needed.

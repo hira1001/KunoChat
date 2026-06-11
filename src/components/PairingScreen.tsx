@@ -30,7 +30,7 @@ export function PairingScreen({ status, signalingConfigured, pairingCode, signal
         >
           <ChevronLeft className="h-4 w-4" />
         </button>
-        <div className="ml-1 text-[14px] font-semibold text-text" data-tauri-drag-region>
+        <div className="ml-1 text-[14px] font-semibold text-text">
           KunoChat
         </div>
       </header>
@@ -99,12 +99,12 @@ function pairingHelpText(status: ConnectionStatus, signalingConfigured: boolean,
   }
 
   if (status === "failed") {
-    return `接続できません。npm run signal を起動して ${signalingUrl} を確認してください。`;
+    return `接続できません。同じWi-Fi/LANでKunoChatを開いているか確認してください。設定URL: ${signalingUrl}`;
   }
 
   if (status === "connecting") {
     return "接続準備中です。相手がコードを入力すると直接P2Pでつながります。";
   }
 
-  return "相手がこのコードを入力すると、直接P2Pで通信を開始します。";
+  return "同じWi-Fi/LANでは通常、自動で相手を見つけます。コード入力は手動接続用です。";
 }

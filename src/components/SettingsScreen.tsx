@@ -1,4 +1,4 @@
-import { FolderOpen, Minus, Trash2, X } from "lucide-react";
+import { FolderOpen, Trash2, X } from "lucide-react";
 import type { KunoSettings } from "../features/chat/messageTypes";
 import { StatusDot } from "./StatusDot";
 
@@ -14,18 +14,10 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
   return (
     <div className="flex h-full w-full flex-col bg-white">
       <header className="flex h-[52px] items-center border-b border-border px-4">
-        <div className="flex flex-1 items-center gap-2 text-[14px] font-semibold text-text" data-tauri-drag-region>
+        <div className="flex flex-1 items-center gap-2 text-[14px] font-semibold text-text">
           KunoChat
           <StatusDot status="connected" label="connected" />
         </div>
-        <button
-          type="button"
-          aria-label="Minimize settings"
-          onClick={onClose}
-          className="grid h-8 w-8 place-items-center rounded-pill text-muted hover:bg-surface-hover hover:text-text"
-        >
-          <Minus className="h-4 w-4" />
-        </button>
         <button
           type="button"
           aria-label="Close settings"

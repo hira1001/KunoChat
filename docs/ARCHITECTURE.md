@@ -7,7 +7,8 @@ KunoChat is split into UI, domain state, native integration, signaling, RTC, tra
 - UI: `WindowShell`, `MiniPill`, chat cards, composer, pairing, settings, drop overlay.
 - State: Zustand stores own current view, connection status, messages, draft text, attachments, transfer states, and settings.
 - Native adapter: React calls `platformAdapter`; Rust/Tauri commands handle OS-specific work.
-- Signal: `server/signaling-server.mjs` relays room join, offer, answer, and ICE only. It must never carry text bodies or file bodies.
+- Embedded signal: `src-tauri/src/native/signal_server.rs` starts with the app and relays room join, offer, answer, and ICE only. It must never carry text bodies or file bodies.
+- LAN discovery: `src-tauri/src/native/peer_discovery.rs` broadcasts/listens on the local network and asks the UI to auto-connect when another KunoChat instance appears.
 - RTC: two WebRTC DataChannels are active: `control` and `binary`.
 - Transfer: text, typing, ACK, and asset metadata stay on `control`; file/image bytes stream on `binary`.
 - Storage: local UI persistence is active now; SQLite/store boundaries are present for durable native history and settings.
@@ -23,6 +24,7 @@ Sending should feel immediate:
 - The `binary` channel is reserved for file/image chunks only.
 - Large file transfer must never block control messages.
 - WebSocket signaling remains setup-only, so send speed does not depend on uploading content to a server.
+- Installed desktop apps on the same Wi-Fi/LAN do not need a separate signaling command; the server is embedded in the app process.
 
 ## Native Boundary
 

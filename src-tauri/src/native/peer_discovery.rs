@@ -133,3 +133,65 @@ fn room_id_for_pair(left: &str, right: &str) -> String {
     }
     format!("{:06}", hash % 1_000_000)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ipv4_number_preserves_ordering() {
+        assert!(ipv4_number(Ipv4Addr::new(192, 168, 1, 2)) < ipv4_number(Ipv4Addr::new(192, 168, 1, 3)));
+    }
+
+    #[test]
+    fn ipv4_number_distinguishes_network_octets() {
+        assert!(ipv4_number(Ipv4Addr::new(10, 0, 0, 9)) < ipv4_number(Ipv4Addr::new(10, 0, 1, 1)));
+    }
+
+    #[test]
+    fn room_id_for_pair_is_symmetric() {
+        assert_eq!(room_id_for_pair("left", "right"), room_id_for_pair("right", "left"));
+    }
+
+    #[test]
+    fn room_id_for_pair_is_six_digits() {
+        let room_id = room_id_for_pair("a", "b");
+        assert_eq!(room_id.len(), 6);
+        assert!(room_id.chars().all(|char| char.is_ascii_digit()));
+    }
+
+    #[test]
+    fn room_id_for_pair_changes_for_different_pair() {
+        assert_ne!(room_id_for_pair("a", "b"), room_id_for_pair("a", "c"));
+    }
+
+    #[test]
+    fn discovery_message_serializes_camel_case() {
+        let message = DiscoveryMessage {
+            app: "KunoChat".to_string(),
+            instance_id: "abc".to_string(),
+        };
+        let value = serde_json::to_value(message).expect("serialize");
+        assert_eq!(value, serde_json::json!({ "app": "KunoChat", "instanceId": "abc" }));
+    }
+
+    #[test]
+    fn auto_connect_payload_serializes_camel_case() {
+        let payload = AutoConnectPayload {
+            signaling_url: "ws://127.0.0.1:8787".to_string(),
+            room_id: "123456".to_string(),
+            mode: "host".to_string(),
+            peer_hint: "127.0.0.2".to_string(),
+        };
+        let value = serde_json::to_value(payload).expect("serialize");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "signalingUrl": "ws://127.0.0.1:8787",
+                "roomId": "123456",
+                "mode": "host",
+                "peerHint": "127.0.0.2"
+            })
+        );
+    }
+}

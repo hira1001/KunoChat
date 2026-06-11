@@ -9,6 +9,8 @@
     "dev:full": "concurrently -k -n signal,dev \"npm:signal\" \"npm:dev\"",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "tsc -b",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
@@ -36,6 +38,8 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.6.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.17",
     "@types/react-dom": "^18.3.5",
@@ -43,9 +47,11 @@
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "concurrently": "^10.0.3",
+    "jsdom": "^29.1.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
-    "vite": "^6.0.3"
+    "vite": "^6.0.3",
+    "vitest": "^4.1.8"
   }
 }

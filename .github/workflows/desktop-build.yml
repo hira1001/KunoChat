@@ -38,8 +38,15 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Frontend and signaling tests
+        run: npm test
+
       - name: Build frontend
         run: npm run build
+
+      - name: Rust native tests
+        run: cargo test
+        working-directory: src-tauri
 
       - name: Build Tauri bundle
         run: npm run tauri:build

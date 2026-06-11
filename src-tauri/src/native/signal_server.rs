@@ -221,3 +221,95 @@ fn peer_summary(peer: &Peer) -> Value {
         "displayName": peer.display_name
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn peer(peer_id: &str, display_name: &str) -> (Peer, tokio::sync::mpsc::UnboundedReceiver<Message>) {
+        let (tx, rx) = unbounded_channel();
+        (
+            Peer {
+                peer_id: peer_id.to_string(),
+                display_name: display_name.to_string(),
+                tx,
+            },
+            rx,
+        )
+    }
+
+    #[test]
+    fn normalize_room_id_keeps_digits_only() {
+        assert_eq!(normalize_room_id("739-216"), "739216");
+    }
+
+    #[test]
+    fn normalize_room_id_limits_to_six_digits() {
+        assert_eq!(normalize_room_id("123456789"), "123456");
+    }
+
+    #[test]
+    fn normalize_room_id_drops_letters() {
+        assert_eq!(normalize_room_id("ab12cd34ef56"), "123456");
+    }
+
+    #[test]
+    fn normalize_room_id_allows_empty_result() {
+        assert_eq!(normalize_room_id("abc"), "");
+    }
+
+    #[test]
+    fn peer_summary_contains_public_fields_only() {
+        let (alice, _rx) = peer("alice", "Alice");
+        assert_eq!(peer_summary(&alice), json!({ "peerId": "alice", "displayName": "Alice" }));
+    }
+
+    #[test]
+    fn first_join_gets_no_existing_peers() {
+        let rooms = Arc::new(Mutex::new(HashMap::new()));
+        let (alice, _rx) = peer("alice", "Alice");
+        let existing = join_room(&rooms, "123456", alice).expect("join should work");
+        assert!(existing.is_empty());
+    }
+
+    #[test]
+    fn second_join_gets_first_peer_summary() {
+        let rooms = Arc::new(Mutex::new(HashMap::new()));
+        let (alice, _alice_rx) = peer("alice", "Alice");
+        let (bob, _bob_rx) = peer("bob", "Bob");
+        join_room(&rooms, "123456", alice).expect("first join should work");
+        let existing = join_room(&rooms, "123456", bob).expect("second join should work");
+        assert_eq!(existing, vec![json!({ "peerId": "alice", "displayName": "Alice" })]);
+    }
+
+    #[test]
+    fn room_rejects_third_distinct_peer() {
+        let rooms = Arc::new(Mutex::new(HashMap::new()));
+        let (alice, _alice_rx) = peer("alice", "Alice");
+        let (bob, _bob_rx) = peer("bob", "Bob");
+        let (charlie, _charlie_rx) = peer("charlie", "Charlie");
+        join_room(&rooms, "123456", alice).expect("first join should work");
+        join_room(&rooms, "123456", bob).expect("second join should work");
+        assert!(join_room(&rooms, "123456", charlie).is_err());
+    }
+
+    #[test]
+    fn same_peer_can_rejoin_full_room() {
+        let rooms = Arc::new(Mutex::new(HashMap::new()));
+        let (alice, _alice_rx) = peer("alice", "Alice");
+        let (bob, _bob_rx) = peer("bob", "Bob");
+        let (alice_again, _alice_again_rx) = peer("alice", "Alice 2");
+        join_room(&rooms, "123456", alice).expect("first join should work");
+        join_room(&rooms, "123456", bob).expect("second join should work");
+        assert!(join_room(&rooms, "123456", alice_again).is_ok());
+    }
+
+    #[test]
+    fn leave_room_removes_empty_room() {
+        let rooms = Arc::new(Mutex::new(HashMap::new()));
+        let (alice, _alice_rx) = peer("alice", "Alice");
+        join_room(&rooms, "123456", alice).expect("join should work");
+        leave_room(&rooms, "123456", "alice");
+        assert!(rooms.lock().expect("lock").get("123456").is_none());
+    }
+}

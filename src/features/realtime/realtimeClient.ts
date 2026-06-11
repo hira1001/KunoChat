@@ -448,7 +448,7 @@ class KunoRealtimeClient {
 
 export const realtimeClient = new KunoRealtimeClient();
 
-function encodeBinaryChunk(transferId: string, payload: ArrayBuffer): ArrayBuffer {
+export function encodeBinaryChunk(transferId: string, payload: ArrayBuffer): ArrayBuffer {
   const idBytes = new TextEncoder().encode(transferId);
   const output = new Uint8Array(2 + idBytes.byteLength + payload.byteLength);
   const view = new DataView(output.buffer);
@@ -458,7 +458,7 @@ function encodeBinaryChunk(transferId: string, payload: ArrayBuffer): ArrayBuffe
   return output.buffer;
 }
 
-function decodeBinaryChunk(data: ArrayBuffer): { transferId: string; payload: ArrayBuffer } {
+export function decodeBinaryChunk(data: ArrayBuffer): { transferId: string; payload: ArrayBuffer } {
   const view = new DataView(data);
   const idLength = view.getUint16(0);
   const idStart = 2;

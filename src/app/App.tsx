@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type ClipboardEvent, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { AttachmentPreview } from "../components/AttachmentPreview";
 import { Composer } from "../components/Composer";
 import { DropOverlay } from "../components/DropOverlay";
@@ -15,6 +15,7 @@ import { realtimeClient } from "../features/realtime/realtimeClient";
 import type { RealtimeAssetMeta, RealtimeBinarySource } from "../features/realtime/realtimeTypes";
 import { parseClipboardItems } from "../features/sendables/clipboardParser";
 import { parseDroppedFiles } from "../features/sendables/dropParser";
+import { sha256ArrayBuffer, sha256ForAsset } from "../features/transfer/hash";
 import { listen } from "@tauri-apps/api/event";
 
 type AutoConnectPayload = {
@@ -22,6 +23,12 @@ type AutoConnectPayload = {
   roomId: string;
   mode: "host" | "join";
   peerHint: string;
+};
+
+type ConnectionDiagnostic = {
+  tone: "info" | "warning" | "danger";
+  title: string;
+  detail: string;
 };
 
 export function App() {
@@ -56,6 +63,8 @@ export function App() {
   const hostedRoomRef = useRef<string>();
   const autoConnectRef = useRef<string>();
   const typingStopTimerRef = useRef<number>();
+  const [diagnostic, setDiagnostic] = useState<ConnectionDiagnostic>();
+  const [lastAutoConnect, setLastAutoConnect] = useState<AutoConnectPayload>();
   if (!sessionPeerIdRef.current) {
     sessionPeerIdRef.current = `${settings.localPeerId}_${crypto.randomUUID()}`;
   }
@@ -69,7 +78,20 @@ export function App() {
       onStatus: (status) => {
         setConnectionStatus(status);
         if (status === "connected") {
+          setDiagnostic(undefined);
           setView("main");
+        } else if (status === "reconnecting") {
+          setDiagnostic({
+            tone: "warning",
+            title: "再接続中",
+            detail: "相手PCまたはネットワークが一時的に途切れています。"
+          });
+        } else if (status === "offline") {
+          setDiagnostic({
+            tone: "warning",
+            title: "相手がオフラインです",
+            detail: "相手のKunoChatが開いているか確認してください。"
+          });
         }
       },
       onPeer: (peer) => updateSettings({ peerDisplayName: peer.displayName }),
@@ -84,15 +106,17 @@ export function App() {
           kind: asset.kind,
           name: asset.name,
           size: asset.size,
-          mime: asset.mime
+          mime: asset.mime,
+          sha256: asset.sha256
         });
       },
       onAssetProgress: ({ id, transferId, progress }) =>
         updateTransferProgress({ messageId: id, transferId, progress }),
       onAssetComplete: ({ id, transferId, objectUrl, blob, meta }) => {
-        completeTransfer({ messageId: id, transferId, objectUrl });
         if (blob && meta) {
           void persistReceivedAsset({ id, transferId, objectUrl, blob, meta }, completeTransfer, failTransfer);
+        } else {
+          completeTransfer({ messageId: id, transferId, objectUrl });
         }
       },
       onAssetFailed: ({ id, transferId, message }) =>
@@ -108,7 +132,14 @@ export function App() {
           typingStopTimerRef.current = window.setTimeout(() => setPeerTyping(false), 1800);
         }
       },
-      onError: () => setConnectionStatus("failed")
+      onError: (message) => {
+        setConnectionStatus("failed");
+        setDiagnostic({
+          tone: "danger",
+          title: "接続できません",
+          detail: connectionHelpText(message)
+        });
+      }
     });
 
     return () => {
@@ -171,6 +202,12 @@ export function App() {
         }
 
         autoConnectRef.current = key;
+        setLastAutoConnect(event.payload);
+        setDiagnostic({
+          tone: "info",
+          title: "LANでKunoChatを検出",
+          detail: `${event.payload.peerHint} と接続を準備しています。`
+        });
         setView("main");
         void realtimeClient.connect({
           roomId: event.payload.roomId,
@@ -288,6 +325,23 @@ export function App() {
     }).catch(() => undefined);
   }
 
+  function handleRetryAutoConnect() {
+    const sessionPeerId = sessionPeerIdRef.current;
+    const payload = lastAutoConnect;
+    if (!sessionPeerId || !payload) {
+      setView("pairing");
+      return;
+    }
+
+    void realtimeClient.connect({
+      roomId: payload.roomId,
+      localPeerId: sessionPeerId,
+      displayName: settings.displayName || "You",
+      mode: payload.mode,
+      signalingUrl: payload.signalingUrl
+    }).catch(() => undefined);
+  }
+
   const peerName = settings.peerDisplayName ?? (connectionStatus === "connected" ? "Peer" : "未接続");
   const composerDisabled = connectionStatus !== "connected";
 
@@ -352,6 +406,12 @@ export function App() {
           onPaste={handlePaste}
         >
           <Header status={connectionStatus} peerName={peerName} onSettings={() => setView("settings")} />
+          <ConnectionBanner
+            diagnostic={diagnostic}
+            status={connectionStatus}
+            onPair={() => setView("pairing")}
+            onRetry={handleRetryAutoConnect}
+          />
           <MessageList messages={messages} connectionStatus={connectionStatus} peerName={peerName} showTyping={peerTyping} />
           <DropOverlay visible={isDraggingOver} />
           <AttachmentPreview attachments={attachments} onRemove={removeAttachment} />
@@ -382,6 +442,7 @@ async function sendRealtimeMessage(message: ChatMessage) {
   }
 
   if ((message.kind === "file" || message.kind === "image") && message.asset) {
+    const sha256 = await sha256ForAsset(message.asset);
     await realtimeClient.sendAsset(
       {
         id: message.asset.id,
@@ -393,7 +454,8 @@ async function sendRealtimeMessage(message: ChatMessage) {
         kind: message.asset.kind,
         name: message.asset.name,
         size: message.asset.size,
-        mime: message.asset.mime
+        mime: message.asset.mime,
+        sha256
       },
       createBinarySource(message.asset)
     );
@@ -402,6 +464,7 @@ async function sendRealtimeMessage(message: ChatMessage) {
 
   if (message.kind === "bundle" && message.bundle) {
     for (const item of message.bundle.items) {
+      const sha256 = await sha256ForAsset(item);
       await realtimeClient.sendAsset(
         {
           id: item.id,
@@ -414,6 +477,7 @@ async function sendRealtimeMessage(message: ChatMessage) {
           name: item.name,
           size: item.size,
           mime: item.mime,
+          sha256,
           caption: message.bundle.caption
         },
         createBinarySource(item)
@@ -447,6 +511,12 @@ async function persistReceivedAsset(
 ) {
   try {
     const bytes = await input.blob.arrayBuffer();
+    if (input.meta.sha256) {
+      const actualHash = await sha256ArrayBuffer(bytes);
+      if (actualHash !== input.meta.sha256) {
+        throw new Error("ファイルの整合性チェックに失敗しました。保存せず破棄しました。");
+      }
+    }
     const savePath = await platformAdapter.saveReceivedFile(input.meta.name, bytes);
     if (savePath) {
       completeTransfer({
@@ -467,6 +537,72 @@ async function persistReceivedAsset(
       message: error instanceof Error ? error.message : "受信ファイルを保存できませんでした。"
     });
   }
+}
+
+function connectionHelpText(message: string): string {
+  if (/timed out|Cannot reach/i.test(message)) {
+    return "同じWi-Fi/LANにいるか、OSのファイアウォールでKunoChatを許可しているか確認してください。";
+  }
+  if (/room/i.test(message)) {
+    return "この接続ルームはすでに使用中です。相手PCだけが開いている状態で再試行してください。";
+  }
+  return message || "相手PC、ネットワーク、ファイアウォール設定を確認してください。";
+}
+
+function ConnectionBanner({
+  diagnostic,
+  status,
+  onPair,
+  onRetry
+}: {
+  diagnostic?: ConnectionDiagnostic;
+  status: string;
+  onPair: () => void;
+  onRetry: () => void;
+}) {
+  if (!diagnostic && status === "connected") {
+    return null;
+  }
+
+  const activeDiagnostic =
+    diagnostic ??
+    (status === "pairing"
+      ? {
+          tone: "info" as const,
+          title: "接続待ち",
+          detail: "同じWi-Fi/LANで相手のKunoChatを開くと自動接続を試みます。"
+        }
+      : undefined);
+
+  if (!activeDiagnostic) {
+    return null;
+  }
+
+  const toneClass =
+    activeDiagnostic.tone === "danger"
+      ? "border-red-200 bg-red-50 text-red-700"
+      : activeDiagnostic.tone === "warning"
+        ? "border-amber-200 bg-amber-50 text-amber-800"
+        : "border-blue-100 bg-blue-50 text-blue-700";
+
+  return (
+    <div className={`mx-3 mt-3 rounded-[12px] border px-3 py-2 ${toneClass}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[12px] font-semibold">{activeDiagnostic.title}</div>
+          <div className="mt-0.5 text-[11px] leading-4 opacity-90">{activeDiagnostic.detail}</div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <button type="button" onClick={onRetry} className="rounded-pill bg-white/80 px-2 py-1 text-[11px] font-medium shadow-sm">
+            Retry
+          </button>
+          <button type="button" onClick={onPair} className="rounded-pill bg-white/80 px-2 py-1 text-[11px] font-medium shadow-sm">
+            Pair
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function createPairingCode(): string {

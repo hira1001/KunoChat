@@ -35,6 +35,7 @@ type ChatStore = {
     name: string;
     size: number;
     mime: string;
+    sha256?: string;
   }) => void;
   updateTransferProgress: (input: { messageId: string; transferId: string; progress: number }) => void;
   completeTransfer: (input: { messageId: string; transferId: string; objectUrl?: string; savePath?: string }) => void;
@@ -136,6 +137,7 @@ export const useChatStore = create<ChatStore>()(
                   name: input.name,
                   size: input.size,
                   mime: input.mime,
+                  sha256: input.sha256,
                   transferId: input.transferId,
                   progress: 0
                 }
@@ -148,7 +150,8 @@ export const useChatStore = create<ChatStore>()(
                 status: "receiving",
                 progress: 0,
                 size: input.size,
-                mime: input.mime
+                mime: input.mime,
+                sha256: input.sha256
               }
             },
             settings: {

@@ -52,6 +52,7 @@ pub fn run() {
             fs::ensure_download_dir,
             fs::unique_save_path,
             fs::file_metadata,
+            fs::file_sha256,
             fs::read_file_chunk,
             fs::save_received_file,
             opener::open_path,

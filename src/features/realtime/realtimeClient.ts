@@ -341,11 +341,10 @@ class KunoRealtimeClient {
     }
 
     if (message.type === "asset-complete") {
-      this.callbacks?.onAssetComplete({
-        id: message.id,
-        transferId: message.transferId,
-        objectUrl: message.objectUrl
-      });
+      const transfer = this.incomingTransfers.get(message.transferId);
+      if (transfer && transfer.receivedBytes >= transfer.meta.size) {
+        this.completeIncomingTransfer(message.transferId);
+      }
       return;
     }
 
@@ -420,23 +419,32 @@ class KunoRealtimeClient {
     });
 
     if (transfer.receivedBytes >= transfer.meta.size) {
-      const blob = new Blob(transfer.chunks, { type: transfer.meta.mime });
-      const objectUrl = URL.createObjectURL(blob);
-      this.incomingTransfers.delete(chunk.transferId);
-      this.callbacks?.onAssetComplete({
-        id: transfer.meta.messageId,
-        transferId: transfer.meta.transferId,
-        objectUrl,
-        blob,
-        meta: transfer.meta
-      });
-      this.sendControl({
-        v: 1,
-        type: "ack",
-        id: transfer.meta.messageId,
-        receivedAt: Date.now()
-      });
+      this.completeIncomingTransfer(chunk.transferId);
     }
+  }
+
+  private completeIncomingTransfer(transferId: string) {
+    const transfer = this.incomingTransfers.get(transferId);
+    if (!transfer) {
+      return;
+    }
+
+    const blob = new Blob(transfer.chunks, { type: transfer.meta.mime });
+    const objectUrl = URL.createObjectURL(blob);
+    this.incomingTransfers.delete(transferId);
+    this.callbacks?.onAssetComplete({
+      id: transfer.meta.messageId,
+      transferId: transfer.meta.transferId,
+      objectUrl,
+      blob,
+      meta: transfer.meta
+    });
+    this.sendControl({
+      v: 1,
+      type: "ack",
+      id: transfer.meta.messageId,
+      receivedAt: Date.now()
+    });
   }
 
   private sendSignal(message: { type: "offer" | "answer" | "ice"; payload: unknown }) {

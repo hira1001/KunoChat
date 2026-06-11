@@ -13,6 +13,7 @@ type FileCardProps = {
 export function FileCard({ asset, status, progress, error }: FileCardProps) {
   const activeProgress = progress ?? asset.progress;
   const failed = status === "failed";
+  const verified = Boolean(asset.sha256 && (status === "received" || status === "saved"));
   const label = fileLabel(asset.name, asset.mime);
   const color = labelColor(label);
 
@@ -31,6 +32,7 @@ export function FileCard({ asset, status, progress, error }: FileCardProps) {
           <div className="truncate text-[13px] font-medium text-text">{asset.name}</div>
           <div className="mt-0.5 flex items-center gap-2 text-[12px] text-muted">
             <span>{formatBytes(asset.size)}</span>
+            {verified ? <span className="text-success">· 検証済み</span> : null}
             {status === "sending" ? <span>· 送信中...</span> : null}
             {failed ? <span className="text-danger">· {error ?? "送信失敗"}</span> : null}
           </div>

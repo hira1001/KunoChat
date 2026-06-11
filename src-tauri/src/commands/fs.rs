@@ -1,4 +1,5 @@
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
@@ -94,6 +95,24 @@ pub async fn read_file_chunk(path: String, offset: u64, length: u64) -> Result<V
 }
 
 #[tauri::command]
+pub async fn file_sha256(path: String) -> Result<String, String> {
+    let path = canonical_file_path(&path)?;
+    let mut file = File::open(&path).map_err(|error| error.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+
+    loop {
+        let bytes_read = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[tauri::command]
 pub async fn save_received_file(filename: String, bytes: Vec<u8>) -> Result<String, String> {
     let save_path = PathBuf::from(unique_save_path(filename).await?);
     if let Some(parent) = save_path.parent() {
@@ -126,4 +145,24 @@ fn sanitize_filename(filename: &str) -> String {
         .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
         .trim()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_filename;
+
+    #[test]
+    fn sanitize_filename_replaces_path_separators() {
+        assert_eq!(sanitize_filename("../bad/file.txt"), ".._bad_file.txt");
+    }
+
+    #[test]
+    fn sanitize_filename_replaces_windows_reserved_chars() {
+        assert_eq!(sanitize_filename("a:b*c?d\"e<f>g|h.txt"), "a_b_c_d_e_f_g_h.txt");
+    }
+
+    #[test]
+    fn sanitize_filename_trims_whitespace() {
+        assert_eq!(sanitize_filename("  file.txt  "), "file.txt");
+    }
 }

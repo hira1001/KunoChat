@@ -84,6 +84,7 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 - WebRTC `binary` DataChannel for dropped/pasted file and image bodies.
 - Native path-backed reads for files selected with the `+` picker, tray Send File, or shortcut entrypoint.
 - File transfer metadata/progress/completion over `control`, chunks over `binary`.
+- File integrity verification with SHA-256 metadata and receive-side hash checks.
 - Received files are saved locally under `Downloads/KunoChat` and keep their saved path for reveal/open flows.
 - Optimistic send UX: Send immediately renders locally, clears the composer, then updates `sending -> sent -> received`.
 - Teams-style typing indicator over the same instant control channel.
@@ -96,12 +97,14 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 - Zustand app state for view, connection status, messages, draft, attachments, transfer states, and settings.
 - Native command/plugin boundaries for tray, shortcuts, notifications, file open/reveal, autostart, single instance, close-to-hide, window state, store, SQL, picked-file reads, and received-file saves.
 - Desktop icons generated for macOS `.icns`, Windows `.ico`, and PNG sizes.
+- CI quality gates for TypeScript, Vitest, Rust tests, frontend build, and Tauri bundle build.
+- Release workflow for tested macOS/Windows artifacts on `v*` tags.
 - Debug native bundle validation has passed on macOS with Rust installed.
 
 ## Next Phases
 
 1. Add an optional public relay for remote networks where LAN discovery cannot see the other computer.
 2. Add reconnect/session resume and resend for interrupted connections.
-3. Add sha256 verification and retry/resume for interrupted asset transfers.
+3. Add transfer cancel/retry/resume controls.
 4. Run two-machine flaky-network and NAT traversal tests, adding TURN only when needed.
-5. Polish OS-specific notification permissions, Windows taskbar progress, notarization/signing, and release distribution.
+5. Add publisher signing/notarization credentials for warning-free public distribution.

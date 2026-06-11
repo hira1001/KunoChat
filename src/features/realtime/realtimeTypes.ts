@@ -27,6 +27,7 @@ export type RealtimeAssetMeta = {
   name: string;
   size: number;
   mime: string;
+  sha256?: string;
   caption?: string;
 };
 

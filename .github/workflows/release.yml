@@ -1,0 +1,75 @@
+name: Release Desktop Apps
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macOS
+            os: macos-latest
+            artifact_glob: |
+              src-tauri/target/release/bundle/**/*.dmg
+              src-tauri/target/release/bundle/**/*.app
+          - platform: Windows
+            os: windows-latest
+            artifact_glob: |
+              src-tauri/target/release/bundle/**/*.msi
+              src-tauri/target/release/bundle/**/*.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Frontend and signaling tests
+        run: npm test
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Rust native tests
+        run: cargo test
+        working-directory: src-tauri
+
+      - name: Build Tauri bundle
+        run: npm run tauri:build
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: KunoChat-${{ matrix.platform }}
+          path: ${{ matrix.artifact_glob }}
+          if-no-files-found: error
+
+      - name: Attach bundles to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact_glob }}
+          fail_on_unmatched_files: true

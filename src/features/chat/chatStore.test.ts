@@ -154,8 +154,9 @@ describe("chatStore", () => {
   });
 
   test("starts receiving peer assets", () => {
-    useChatStore.getState().receivePeerAsset({ id: "asset_msg", transferId: "tr_1", senderId: "peer", senderName: "Taro", createdAt: 1, kind: "file", name: "a.pdf", size: 42, mime: "application/pdf" });
-    expect(useChatStore.getState().transferStates.tr_1).toMatchObject({ status: "receiving", progress: 0, size: 42 });
+    useChatStore.getState().receivePeerAsset({ id: "asset_msg", transferId: "tr_1", senderId: "peer", senderName: "Taro", createdAt: 1, kind: "file", name: "a.pdf", size: 42, mime: "application/pdf", sha256: "abc" });
+    expect(useChatStore.getState().transferStates.tr_1).toMatchObject({ status: "receiving", progress: 0, size: 42, sha256: "abc" });
+    expect(useChatStore.getState().messages[0].asset?.sha256).toBe("abc");
   });
 
   test("updates transfer progress on message and state", () => {

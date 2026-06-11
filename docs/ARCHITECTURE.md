@@ -11,6 +11,7 @@ KunoChat is split into UI, domain state, native integration, signaling, RTC, tra
 - LAN discovery: `src-tauri/src/native/peer_discovery.rs` broadcasts/listens on the local network and asks the UI to auto-connect when another KunoChat instance appears.
 - RTC: two WebRTC DataChannels are active: `control` and `binary`.
 - Transfer: text, typing, ACK, and asset metadata stay on `control`; file/image bytes stream on `binary`.
+- Integrity: asset metadata can include SHA-256; receivers verify bytes before saving when a hash is present.
 - Storage: local UI persistence is active now; SQLite/store boundaries are present for durable native history and settings.
 
 ## Fast Send Model
@@ -23,6 +24,7 @@ Sending should feel immediate:
 - The WebRTC `control` channel is reserved for text, typing, ACKs, progress, cancel, retry, and ping/pong.
 - The `binary` channel is reserved for file/image chunks only.
 - Large file transfer must never block control messages.
+- `asset-complete` is not trusted by itself; a receiver completes only after expected binary bytes arrive.
 - WebSocket signaling remains setup-only, so send speed does not depend on uploading content to a server.
 - Installed desktop apps on the same Wi-Fi/LAN do not need a separate signaling command; the server is embedded in the app process.
 

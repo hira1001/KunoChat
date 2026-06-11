@@ -101,6 +101,14 @@ export const platformAdapter = {
     return new Uint8Array(bytes).buffer;
   },
 
+  async fileSha256(path: string): Promise<string> {
+    if (!hasTauri) {
+      throw new Error("Native file hashing is only available in Tauri.");
+    }
+
+    return invoke<string>("file_sha256", { path });
+  },
+
   async saveReceivedFile(name: string, bytes: ArrayBuffer): Promise<string | undefined> {
     if (!hasTauri) {
       return undefined;

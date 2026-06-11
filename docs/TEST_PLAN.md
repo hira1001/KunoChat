@@ -1,11 +1,11 @@
 # Test Plan
 
-KunoChat uses automated unit/integration tests plus manual two-device system tests. The current automated suite covers 152 cases: 135 Vitest cases and 17 Cargo cases.
+KunoChat uses automated unit/integration tests plus manual two-device system tests. The current automated suite covers 160 cases: 140 Vitest cases and 20 Cargo cases.
 
 ## Automated Evidence
 
-- `npm test`: 135 passed.
-- `cargo test`: 17 passed.
+- `npm test`: 140 passed.
+- `cargo test`: 20 passed.
 - `npm run typecheck`: passed.
 - `npm run build`: passed.
 
@@ -120,6 +120,11 @@ KunoChat uses automated unit/integration tests plus manual two-device system tes
 | TC-098 | Rust unit | Discovery | Room id shape | six digits |
 | TC-099 | Rust unit | Discovery | Discovery JSON | camelCase payload |
 | TC-100 | Rust unit | Discovery | Auto-connect JSON | UI event payload shape |
+| TC-101 | Unit | Hash | Empty payload SHA-256 | known digest |
+| TC-102 | Unit | Hash | Text payload SHA-256 | known digest |
+| TC-103 | Unit | Hash | Native path asset hashing | calls native command |
+| TC-104 | Unit | Hash | Browser File hashing | hash returned |
+| TC-105 | Unit | Hash | Missing readable source | undefined |
 
 ## Manual System Cases
 

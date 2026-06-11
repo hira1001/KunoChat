@@ -11,6 +11,7 @@ KunoChat is designed as a native desktop companion for Windows and macOS. The cu
 - LAN peer discovery for open-app-only connection on the same network.
 - Native file dialog adapter.
 - Native metadata and chunk-read commands for picker-selected files.
+- Native SHA-256 command for path-backed file integrity checks.
 - Native save command for received files under `Downloads/KunoChat`.
 - Open and reveal file commands.
 - Native notification command.
@@ -42,6 +43,7 @@ KunoChat is designed as a native desktop companion for Windows and macOS. The cu
 ## Safety Notes
 
 - File bodies remain local/P2P.
+- Received file bytes are checked against sender SHA-256 metadata before saving when a hash is available.
 - Received files are never auto-opened.
 - Opener permissions should stay scoped to received files and chosen paths.
 - Clipboard access should remain user-gesture driven.

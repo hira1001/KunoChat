@@ -23,6 +23,7 @@ type AutoConnectPayload = {
   roomId: string;
   mode: "host" | "join";
   peerHint: string;
+  source?: "lan" | "tailscale";
 };
 
 type ConnectionDiagnostic = {
@@ -203,9 +204,10 @@ export function App() {
 
         autoConnectRef.current = key;
         setLastAutoConnect(event.payload);
+        const sourceLabel = event.payload.source === "tailscale" ? "Tailscale" : "LAN";
         setDiagnostic({
           tone: "info",
-          title: "LANでKunoChatを検出",
+          title: `${sourceLabel}でKunoChatを検出`,
           detail: `${event.payload.peerHint} と接続を準備しています。`
         });
         setView("main");

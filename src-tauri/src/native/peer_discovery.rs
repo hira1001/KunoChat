@@ -23,6 +23,7 @@ struct AutoConnectPayload {
     room_id: String,
     mode: String,
     peer_hint: String,
+    source: String,
 }
 
 pub fn start(app: AppHandle) {
@@ -99,6 +100,7 @@ async fn run_discovery(app: AppHandle) -> Result<(), String> {
                         room_id,
                         mode: mode.to_string(),
                         peer_hint: remote_ip.to_string(),
+                        source: "lan".to_string(),
                     },
                 );
             }
@@ -182,6 +184,7 @@ mod tests {
             room_id: "123456".to_string(),
             mode: "host".to_string(),
             peer_hint: "127.0.0.2".to_string(),
+            source: "lan".to_string(),
         };
         let value = serde_json::to_value(payload).expect("serialize");
         assert_eq!(
@@ -190,7 +193,8 @@ mod tests {
                 "signalingUrl": "ws://127.0.0.1:8787",
                 "roomId": "123456",
                 "mode": "host",
-                "peerHint": "127.0.0.2"
+                "peerHint": "127.0.0.2",
+                "source": "lan"
             })
         );
     }

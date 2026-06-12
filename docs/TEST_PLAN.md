@@ -1,11 +1,11 @@
 # Test Plan
 
-KunoChat uses automated unit/integration tests plus manual two-device system tests. The current automated suite covers 160 cases: 140 Vitest cases and 20 Cargo cases.
+KunoChat uses automated unit/integration tests plus manual two-device system tests. The current automated suite covers 168 cases: 140 Vitest cases and 28 Cargo cases.
 
 ## Automated Evidence
 
 - `npm test`: 140 passed.
-- `cargo test`: 20 passed.
+- `cargo test`: 28 passed.
 - `npm run typecheck`: passed.
 - `npm run build`: passed.
 
@@ -125,6 +125,13 @@ KunoChat uses automated unit/integration tests plus manual two-device system tes
 | TC-103 | Unit | Hash | Native path asset hashing | calls native command |
 | TC-104 | Unit | Hash | Browser File hashing | hash returned |
 | TC-105 | Unit | Hash | Missing readable source | undefined |
+| TC-106 | Rust unit | Tailscale | No online peer | no candidate |
+| TC-107 | Rust unit | Tailscale | Online peer | candidate selected |
+| TC-108 | Rust unit | Tailscale | Offline peer | ignored |
+| TC-109 | Rust unit | Tailscale | Lower local ID | host mode |
+| TC-110 | Rust unit | Tailscale | Higher local ID | join mode |
+| TC-111 | Rust unit | Tailscale | Room id | symmetric |
+| TC-112 | Rust unit | Tailscale | Status JSON | parses `ID`/`DNSName`/`TailscaleIPs` |
 
 ## Manual System Cases
 
@@ -142,3 +149,5 @@ These require two physical machines and cannot be fully proven from a single Cod
 | SYS-008 | Windows installer artifact | app opens with normal titlebar |
 | SYS-009 | macOS DMG artifact | app opens with normal titlebar |
 | SYS-010 | Guest/isolated Wi-Fi | app does not falsely claim connection if LAN peer traffic is blocked |
+| SYS-011 | Two remote computers with Tailscale | both open KunoChat and connect without entering an IP |
+| SYS-012 | Tailscale installed on only one computer | app stays in clear waiting/failed state |

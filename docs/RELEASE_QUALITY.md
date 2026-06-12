@@ -15,7 +15,7 @@ Every desktop build should pass:
 The current local evidence is:
 
 - Vitest: 140 passed.
-- Cargo: 20 passed.
+- Cargo: 28 passed.
 - TypeScript: passed.
 - Vite production build: passed.
 - Tauri macOS release bundle: passed.
@@ -46,6 +46,7 @@ Until those credentials exist, GitHub Releases are suitable for controlled beta 
 - Install the Windows bundle on a clean Windows PC.
 - Confirm the app opens without terminal commands.
 - Accept firewall prompts and confirm LAN discovery.
+- Confirm Tailscale discovery works without IP entry when both machines are logged into the same tailnet.
 - Send text both ways.
 - Send image, PDF, and multi-file bundle.
 - Confirm received files save under `Downloads/KunoChat`.

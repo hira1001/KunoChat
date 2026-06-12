@@ -9,6 +9,7 @@ KunoChat is split into UI, domain state, native integration, signaling, RTC, tra
 - Native adapter: React calls `platformAdapter`; Rust/Tauri commands handle OS-specific work.
 - Embedded signal: `src-tauri/src/native/signal_server.rs` starts with the app and relays room join, offer, answer, and ICE only. It must never carry text bodies or file bodies.
 - LAN discovery: `src-tauri/src/native/peer_discovery.rs` broadcasts/listens on the local network and asks the UI to auto-connect when another KunoChat instance appears.
+- Tailscale discovery: `src-tauri/src/native/tailscale_discovery.rs` reads `tailscale status --json` when available, probes peer port `8787`, and emits the same auto-connect event without requiring manual IP entry.
 - RTC: two WebRTC DataChannels are active: `control` and `binary`.
 - Transfer: text, typing, ACK, and asset metadata stay on `control`; file/image bytes stream on `binary`.
 - Integrity: asset metadata can include SHA-256; receivers verify bytes before saving when a hash is present.
@@ -27,6 +28,7 @@ Sending should feel immediate:
 - `asset-complete` is not trusted by itself; a receiver completes only after expected binary bytes arrive.
 - WebSocket signaling remains setup-only, so send speed does not depend on uploading content to a server.
 - Installed desktop apps on the same Wi-Fi/LAN do not need a separate signaling command; the server is embedded in the app process.
+- Remote computers on the same Tailscale tailnet can also connect without KunoChat-specific setup when both apps are open and reachable.
 
 ## Native Boundary
 

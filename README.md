@@ -18,6 +18,7 @@ KunoChat is a tiny Windows/macOS desktop send pocket for two people. It is desig
 - WebRTC DataChannel instant text transport
 - Embedded WebSocket signaling server
 - LAN peer discovery
+- Optional zero-input Tailscale peer discovery when Tailscale is already installed and logged in
 - Local SQLite/store/files for history and received files
 
 ## Setup
@@ -29,7 +30,7 @@ curl --proto '=https' --tlsv1.2 https://sh.rustup.rs -sSf | sh
 npm install
 ```
 
-For normal installed-app use, no terminal server command is required. Open KunoChat on both computers on the same Wi-Fi/LAN; each app starts its embedded signaling server and discovers the other app automatically.
+For normal installed-app use, no terminal server command is required. Open KunoChat on both computers on the same Wi-Fi/LAN; each app starts its embedded signaling server and discovers the other app automatically. If both computers already use Tailscale, KunoChat also tries to discover reachable Tailscale peers without asking the user for an IP address.
 
 Copy `.env.example` to `.env` only when changing development fallback URLs:
 
@@ -80,6 +81,7 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 - Generated local pairing code with copy action and automatic room waiting for manual fallback.
 - Embedded WebSocket signaling server for room join, offer, answer, and ICE relay.
 - LAN auto-discovery so two installed apps on the same network can connect without separate setup.
+- Tailscale auto-discovery for remote computers that already share a tailnet and have KunoChat open.
 - WebRTC `control` DataChannel for instant text, typing, ping/pong, and ACK.
 - WebRTC `binary` DataChannel for dropped/pasted file and image bodies.
 - Native path-backed reads for files selected with the `+` picker, tray Send File, or shortcut entrypoint.
@@ -103,7 +105,7 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 
 ## Next Phases
 
-1. Add an optional public relay for remote networks where LAN discovery cannot see the other computer.
+1. Add an optional public relay for remote networks where neither LAN nor Tailscale can reach the other computer.
 2. Add reconnect/session resume and resend for interrupted connections.
 3. Add transfer cancel/retry/resume controls.
 4. Run two-machine flaky-network and NAT traversal tests, adding TURN only when needed.

@@ -1,11 +1,11 @@
 # Test Plan
 
-KunoChat uses automated unit/integration tests plus manual two-device system tests. The current automated suite covers 168 cases: 140 Vitest cases and 28 Cargo cases.
+KunoChat uses automated unit/integration tests plus manual two-device system tests. The current automated suite covers 179 cases: 145 Vitest cases and 34 Cargo cases.
 
 ## Automated Evidence
 
-- `npm test`: 140 passed.
-- `cargo test`: 28 passed.
+- `npm test`: 145 passed.
+- `cargo test`: 34 passed.
 - `npm run typecheck`: passed.
 - `npm run build`: passed.
 
@@ -132,6 +132,17 @@ KunoChat uses automated unit/integration tests plus manual two-device system tes
 | TC-110 | Rust unit | Tailscale | Higher local ID | join mode |
 | TC-111 | Rust unit | Tailscale | Room id | symmetric |
 | TC-112 | Rust unit | Tailscale | Status JSON | parses `ID`/`DNSName`/`TailscaleIPs` |
+| TC-113 | Unit | Transfer | Late SHA-256 | stored on completed transfer |
+| TC-114 | Unit | RTC policy | Control channel | unordered reliable lane |
+| TC-115 | Unit | RTC policy | Binary channel | ordered file lane |
+| TC-116 | Unit | Transfer limits | Chunk size | 256 KiB chunks |
+| TC-117 | Unit | Transfer limits | Backpressure | low threshold below max |
+| TC-118 | Rust unit | Discovery | New LAN peer | emitted immediately |
+| TC-119 | Rust unit | Discovery | Repeated LAN peer | suppressed inside reemit window |
+| TC-120 | Rust unit | Discovery | Repeated LAN peer after window | reemitted |
+| TC-121 | Rust unit | Tailscale | New candidate | emitted immediately |
+| TC-122 | Rust unit | Tailscale | Repeated candidate | suppressed inside reemit window |
+| TC-123 | Rust unit | Tailscale | Repeated candidate after window | reemitted |
 
 ## Manual System Cases
 

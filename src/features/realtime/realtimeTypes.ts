@@ -41,7 +41,7 @@ export type RealtimeControlMessage =
   | { v: 1; type: "ack"; id: string; receivedAt: number }
   | { v: 1; type: "asset-start"; asset: RealtimeAssetMeta }
   | { v: 1; type: "asset-progress"; id: string; transferId: string; progress: number; receivedBytes: number }
-  | { v: 1; type: "asset-complete"; id: string; transferId: string; objectUrl: string }
+  | { v: 1; type: "asset-complete"; id: string; transferId: string; objectUrl: string; sha256?: string }
   | { v: 1; type: "asset-failed"; id: string; transferId: string; message: string }
   | { v: 1; type: "typing"; senderId: string; senderName: string; isTyping: boolean; at: number }
   | { v: 1; type: "ping"; at: number }

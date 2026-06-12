@@ -1,4 +1,5 @@
 import { runtimeConfig } from "../config/runtimeConfig";
+import { TRANSFER_LIMITS } from "../transfer/transferTypes";
 import type {
   RealtimeCallbacks,
   RealtimeAssetMeta,
@@ -18,6 +19,17 @@ type ServerSignal =
   | { type: "ice"; from: string; payload: RTCIceCandidateInit }
   | { type: "error"; message: string };
 
+type IncomingTransfer = {
+  meta: RealtimeAssetMeta;
+  chunks: BlobPart[];
+  receivedBytes: number;
+  senderComplete: boolean;
+};
+
+type SendAssetOptions = {
+  sha256?: string | Promise<string | undefined> | undefined;
+};
+
 class KunoRealtimeClient {
   private callbacks?: RealtimeCallbacks;
   private options?: RealtimeConnectOptions;
@@ -27,14 +39,24 @@ class KunoRealtimeClient {
   private binary?: RTCDataChannel;
   private hasStartedOffer = false;
   private lastTypingSent = 0;
-  private incomingTransfers = new Map<string, { meta: RealtimeAssetMeta; chunks: BlobPart[]; receivedBytes: number }>();
+  private reconnectTimer?: number;
+  private reconnectAttempts = 0;
+  private manualDisconnect = false;
+  private incomingTransfers = new Map<string, IncomingTransfer>();
 
   configure(callbacks: RealtimeCallbacks) {
     this.callbacks = callbacks;
   }
 
   async connect(options: RealtimeConnectOptions) {
-    this.disconnect();
+    this.manualDisconnect = false;
+    this.reconnectAttempts = 0;
+    await this.startConnection(options);
+  }
+
+  private async startConnection(options: RealtimeConnectOptions) {
+    this.clearReconnectTimer();
+    this.closeTransport();
     this.options = {
       ...options,
       roomId: options.roomId.replace(/\D/g, "").slice(0, 6)
@@ -46,6 +68,34 @@ class KunoRealtimeClient {
   }
 
   disconnect() {
+    this.manualDisconnect = true;
+    this.clearReconnectTimer();
+    this.closeTransport();
+    this.incomingTransfers.clear();
+  }
+
+  private closeTransport() {
+    if (this.control) {
+      this.control.onclose = null;
+      this.control.onerror = null;
+      this.control.onmessage = null;
+    }
+    if (this.binary) {
+      this.binary.onclose = null;
+      this.binary.onerror = null;
+      this.binary.onmessage = null;
+      this.binary.onbufferedamountlow = null;
+    }
+    if (this.socket) {
+      this.socket.onclose = null;
+      this.socket.onerror = null;
+      this.socket.onmessage = null;
+    }
+    if (this.peer) {
+      this.peer.onconnectionstatechange = null;
+      this.peer.onicecandidate = null;
+      this.peer.ondatachannel = null;
+    }
     this.control?.close();
     this.binary?.close();
     this.peer?.close();
@@ -85,16 +135,24 @@ class KunoRealtimeClient {
     });
   }
 
-  async sendAsset(meta: RealtimeAssetMeta, source: File | RealtimeBinarySource) {
+  async sendAsset(meta: RealtimeAssetMeta, source: File | RealtimeBinarySource, options: SendAssetOptions = {}) {
     if (this.binary?.readyState !== "open") {
       throw new Error("Binary channel is not open.");
     }
 
+    const sha256Promise = Promise.resolve(options.sha256).catch(() => undefined);
     this.sendControl({ v: 1, type: "asset-start", asset: meta });
 
-    const chunkSize = 64 * 1024;
+    const chunkSize = TRANSFER_LIMITS.chunkSize;
     let offset = 0;
     const size = source.size;
+    let lastProgress = -1;
+    let lastProgressAt = 0;
+
+    if (size === 0) {
+      this.callbacks?.onLocalAssetProgress({ id: meta.messageId, transferId: meta.transferId, progress: 100 });
+    }
+
     while (offset < size) {
       await this.waitForBinaryBuffer();
       const bytes =
@@ -105,22 +163,29 @@ class KunoRealtimeClient {
       offset += bytes.byteLength;
       const progress = size === 0 ? 100 : Math.min(100, Math.round((offset / size) * 100));
       this.callbacks?.onLocalAssetProgress({ id: meta.messageId, transferId: meta.transferId, progress });
-      this.sendControl({
-        v: 1,
-        type: "asset-progress",
-        id: meta.messageId,
-        transferId: meta.transferId,
-        progress,
-        receivedBytes: offset
-      });
+      const now = performance.now();
+      if (progress === 100 || progress - lastProgress >= 3 || now - lastProgressAt > 80) {
+        lastProgress = progress;
+        lastProgressAt = now;
+        this.sendControl({
+          v: 1,
+          type: "asset-progress",
+          id: meta.messageId,
+          transferId: meta.transferId,
+          progress,
+          receivedBytes: offset
+        });
+      }
     }
 
+    const sha256 = await sha256Promise;
     this.sendControl({
       v: 1,
       type: "asset-complete",
       id: meta.messageId,
       transferId: meta.transferId,
-      objectUrl: ""
+      objectUrl: "",
+      sha256
     });
   }
 
@@ -156,14 +221,19 @@ class KunoRealtimeClient {
     }).catch((error) => {
       this.callbacks?.onStatus("failed");
       this.callbacks?.onError(error instanceof Error ? error.message : "Signaling connection failed.");
+      this.scheduleReconnect();
       throw error;
     });
 
     socket.onmessage = (event) => {
-      void this.handleSignal(JSON.parse(String(event.data)) as ServerSignal);
+      try {
+        void this.handleSignal(JSON.parse(String(event.data)) as ServerSignal);
+      } catch {
+        this.callbacks?.onError("Invalid signaling message received.");
+      }
     };
     socket.onclose = () => {
-      if (this.peer?.connectionState === "connected") {
+      if (!this.manualDisconnect && this.peer?.connectionState === "connected") {
         this.callbacks?.onStatus("reconnecting");
       }
     };
@@ -238,7 +308,9 @@ class KunoRealtimeClient {
     }
 
     const peer = new RTCPeerConnection({
-      iceServers: runtimeConfig.iceServers
+      iceServers: runtimeConfig.iceServers,
+      bundlePolicy: "max-bundle",
+      iceCandidatePoolSize: 4
     });
     this.peer = peer;
 
@@ -250,18 +322,21 @@ class KunoRealtimeClient {
 
     peer.onconnectionstatechange = () => {
       if (peer.connectionState === "connected") {
+        this.reconnectAttempts = 0;
         this.callbacks?.onStatus("connected");
       } else if (peer.connectionState === "failed") {
         this.callbacks?.onStatus("failed");
+        this.scheduleReconnect();
       } else if (peer.connectionState === "disconnected") {
         this.callbacks?.onStatus("reconnecting");
+        this.scheduleReconnect();
       } else if (peer.connectionState === "closed") {
         this.callbacks?.onStatus("offline");
       }
     };
 
     if (isInitiator) {
-      this.attachControlChannel(peer.createDataChannel("control", { ordered: true }));
+      this.attachControlChannel(peer.createDataChannel("control", { ordered: false }));
       this.attachBinaryChannel(peer.createDataChannel("binary", { ordered: true }));
     } else {
       peer.ondatachannel = (event) => {
@@ -282,26 +357,43 @@ class KunoRealtimeClient {
     channel.bufferedAmountLowThreshold = 16 * 1024;
 
     channel.onopen = () => {
+      this.reconnectAttempts = 0;
       this.callbacks?.onStatus("connected");
       this.sendControl({ v: 1, type: "ping", at: Date.now() });
     };
-    channel.onclose = () => this.callbacks?.onStatus("offline");
-    channel.onerror = () => this.callbacks?.onStatus("failed");
+    channel.onclose = () => {
+      if (!this.manualDisconnect) {
+        this.callbacks?.onStatus("reconnecting");
+        this.scheduleReconnect();
+      }
+    };
+    channel.onerror = () => {
+      this.callbacks?.onStatus("failed");
+      this.scheduleReconnect();
+    };
     channel.onmessage = (event) => {
-      this.handleControl(JSON.parse(String(event.data)) as RealtimeControlMessage);
+      try {
+        this.handleControl(JSON.parse(String(event.data)) as RealtimeControlMessage);
+      } catch {
+        this.callbacks?.onError("Invalid realtime control message received.");
+      }
     };
   }
 
   private attachBinaryChannel(channel: RTCDataChannel) {
     this.binary = channel;
     channel.binaryType = "arraybuffer";
-    channel.bufferedAmountLowThreshold = 512 * 1024;
+    channel.bufferedAmountLowThreshold = TRANSFER_LIMITS.bufferedAmountLowThreshold;
     channel.onclose = () => {
-      if (this.peer?.connectionState === "connected") {
+      if (!this.manualDisconnect && this.peer?.connectionState === "connected") {
         this.callbacks?.onStatus("reconnecting");
+        this.scheduleReconnect();
       }
     };
-    channel.onerror = () => this.callbacks?.onStatus("failed");
+    channel.onerror = () => {
+      this.callbacks?.onStatus("failed");
+      this.scheduleReconnect();
+    };
     channel.onmessage = (event) => {
       if (event.data instanceof ArrayBuffer) {
         this.handleBinaryChunk(event.data);
@@ -325,7 +417,8 @@ class KunoRealtimeClient {
       this.incomingTransfers.set(message.asset.transferId, {
         meta: message.asset,
         chunks: [],
-        receivedBytes: 0
+        receivedBytes: 0,
+        senderComplete: false
       });
       this.callbacks?.onAssetStart(message.asset);
       return;
@@ -342,8 +435,10 @@ class KunoRealtimeClient {
 
     if (message.type === "asset-complete") {
       const transfer = this.incomingTransfers.get(message.transferId);
-      if (transfer && transfer.receivedBytes >= transfer.meta.size) {
-        this.completeIncomingTransfer(message.transferId);
+      if (transfer) {
+        transfer.senderComplete = true;
+        transfer.meta.sha256 = message.sha256;
+        this.completeIncomingTransferIfReady(message.transferId);
       }
       return;
     }
@@ -383,20 +478,38 @@ class KunoRealtimeClient {
       throw new Error("Binary channel is not open.");
     }
 
-    if (this.binary.bufferedAmount < 2 * 1024 * 1024) {
+    if (this.binary.bufferedAmount < TRANSFER_LIMITS.maxBufferedAmount) {
       return;
     }
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       const channel = this.binary;
       if (!channel) {
         resolve();
         return;
       }
       const originalHandler = channel.onbufferedamountlow;
+      const originalError = channel.onerror;
+      const originalClose = channel.onclose;
+      const restoreHandlers = () => {
+        channel.onbufferedamountlow = originalHandler ?? null;
+        channel.onerror = originalError ?? null;
+        channel.onclose = originalClose ?? null;
+      };
       channel.onbufferedamountlow = (event) => {
         originalHandler?.call(channel, event);
+        restoreHandlers();
         resolve();
+      };
+      channel.onerror = (event) => {
+        restoreHandlers();
+        originalError?.call(channel, event);
+        reject(new Error("Binary channel failed while waiting for buffer pressure to clear."));
+      };
+      channel.onclose = (event) => {
+        restoreHandlers();
+        originalClose?.call(channel, event);
+        reject(new Error("Binary channel closed while waiting for buffer pressure to clear."));
       };
     });
   }
@@ -411,21 +524,22 @@ class KunoRealtimeClient {
     transfer.chunks.push(chunk.payload);
     transfer.receivedBytes += chunk.payload.byteLength;
 
-    const progress = Math.min(100, Math.round((transfer.receivedBytes / transfer.meta.size) * 100));
+    const progress = transfer.meta.size === 0 ? 100 : Math.min(100, Math.round((transfer.receivedBytes / transfer.meta.size) * 100));
     this.callbacks?.onAssetProgress({
       id: transfer.meta.messageId,
       transferId: transfer.meta.transferId,
       progress
     });
 
-    if (transfer.receivedBytes >= transfer.meta.size) {
-      this.completeIncomingTransfer(chunk.transferId);
-    }
+    this.completeIncomingTransferIfReady(chunk.transferId);
   }
 
-  private completeIncomingTransfer(transferId: string) {
+  private completeIncomingTransferIfReady(transferId: string) {
     const transfer = this.incomingTransfers.get(transferId);
     if (!transfer) {
+      return;
+    }
+    if (!transfer.senderComplete || transfer.receivedBytes < transfer.meta.size) {
       return;
     }
 
@@ -451,6 +565,32 @@ class KunoRealtimeClient {
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(message));
     }
+  }
+
+  private clearReconnectTimer() {
+    window.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
+  }
+
+  private scheduleReconnect() {
+    if (this.manualDisconnect || !this.options || this.reconnectTimer) {
+      return;
+    }
+
+    const options = this.options;
+    const delays = [250, 750, 1500, 3000, 5000];
+    const delay = delays[Math.min(this.reconnectAttempts, delays.length - 1)];
+    this.reconnectAttempts += 1;
+    this.callbacks?.onStatus("reconnecting");
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = undefined;
+      if (this.manualDisconnect || this.isReady()) {
+        return;
+      }
+      void this.startConnection(options).catch(() => {
+        this.scheduleReconnect();
+      });
+    }, delay);
   }
 }
 

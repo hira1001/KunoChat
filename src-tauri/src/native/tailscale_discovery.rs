@@ -3,12 +3,14 @@ use std::{
     collections::HashMap,
     net::{SocketAddr, TcpStream, ToSocketAddrs},
     process::Command,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{async_runtime, AppHandle, Emitter};
 use tokio::time;
 
 const SIGNALING_PORT: u16 = 8787;
+const DISCOVERY_INTERVAL: Duration = Duration::from_secs(2);
+const REEMIT_AFTER: Duration = Duration::from_secs(5);
 
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -60,8 +62,8 @@ pub fn start(app: AppHandle) {
 }
 
 async fn run_discovery(app: AppHandle) {
-    let mut interval = time::interval(Duration::from_secs(7));
-    let mut last_key = String::new();
+    let mut interval = time::interval(DISCOVERY_INTERVAL);
+    let mut last_candidate: Option<(String, Instant)> = None;
 
     loop {
         interval.tick().await;
@@ -77,10 +79,11 @@ async fn run_discovery(app: AppHandle) {
         }
 
         let key = format!("{}:{}:{}", candidate.signaling_url, candidate.room_id, candidate.mode);
-        if key == last_key {
+        let now = Instant::now();
+        if !should_emit_candidate(&last_candidate, &key, now) {
             continue;
         }
-        last_key = key;
+        last_candidate = Some((key, now));
 
         let _ = app.emit(
             "kuno:auto-connect",
@@ -92,6 +95,13 @@ async fn run_discovery(app: AppHandle) {
                 source: "tailscale".to_string(),
             },
         );
+    }
+}
+
+fn should_emit_candidate(last_candidate: &Option<(String, Instant)>, key: &str, now: Instant) -> bool {
+    match last_candidate {
+        Some((last_key, last_seen)) if last_key == key => now.duration_since(*last_seen) >= REEMIT_AFTER,
+        _ => true,
     }
 }
 
@@ -321,5 +331,26 @@ mod tests {
     #[test]
     fn command_candidates_include_plain_tailscale() {
         assert!(tailscale_command_candidates().contains(&"tailscale"));
+    }
+
+    #[test]
+    fn should_emit_new_candidate_immediately() {
+        let now = Instant::now();
+        let last_candidate = Some(("old".to_string(), now));
+        assert!(should_emit_candidate(&last_candidate, "new", now));
+    }
+
+    #[test]
+    fn should_suppress_same_candidate_until_reemit_window() {
+        let now = Instant::now();
+        let last_candidate = Some(("same".to_string(), now));
+        assert!(!should_emit_candidate(&last_candidate, "same", now + Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn should_reemit_same_candidate_after_reemit_window() {
+        let now = Instant::now();
+        let last_candidate = Some(("same".to_string(), now));
+        assert!(should_emit_candidate(&last_candidate, "same", now + REEMIT_AFTER));
     }
 }

@@ -22,10 +22,11 @@ Sending should feel immediate:
 - UI creates the local message as soon as the user presses Send.
 - Text/control envelopes use `priority: "instant"`.
 - Typing indicators are lightweight control events and should update within the same instant path.
-- The WebRTC `control` channel is reserved for text, typing, ACKs, progress, cancel, retry, and ping/pong.
+- The WebRTC `control` channel is unordered-but-reliable, reserved for text, typing, ACKs, progress, cancel, retry, and ping/pong.
 - The `binary` channel is reserved for file/image chunks only.
 - Large file transfer must never block control messages.
-- `asset-complete` is not trusted by itself; a receiver completes only after expected binary bytes arrive.
+- Sender-side SHA-256 runs in parallel with binary transfer; large files do not wait for hashing before bytes start moving.
+- `asset-complete` is not trusted by itself; a receiver completes only after expected binary bytes arrive and the sender has declared completion.
 - WebSocket signaling remains setup-only, so send speed does not depend on uploading content to a server.
 - Installed desktop apps on the same Wi-Fi/LAN do not need a separate signaling command; the server is embedded in the app process.
 - Remote computers on the same Tailscale tailnet can also connect without KunoChat-specific setup when both apps are open and reachable.

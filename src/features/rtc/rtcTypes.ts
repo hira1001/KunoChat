@@ -17,7 +17,7 @@ export type RtcChannelPolicy = {
 export const RTC_CHANNEL_POLICIES: RtcChannelPolicy[] = [
   {
     name: "control",
-    ordered: true,
+    ordered: false,
     purpose: "instant text, metadata, ACK, cancel, retry, progress, ping/pong"
   },
   {

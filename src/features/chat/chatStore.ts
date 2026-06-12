@@ -38,7 +38,7 @@ type ChatStore = {
     sha256?: string;
   }) => void;
   updateTransferProgress: (input: { messageId: string; transferId: string; progress: number }) => void;
-  completeTransfer: (input: { messageId: string; transferId: string; objectUrl?: string; savePath?: string }) => void;
+  completeTransfer: (input: { messageId: string; transferId: string; objectUrl?: string; savePath?: string; sha256?: string }) => void;
   failTransfer: (input: { messageId: string; transferId: string; message: string }) => void;
   setDraftText: (text: string) => void;
   addAttachments: (attachments: DraftAttachment[]) => void;
@@ -179,7 +179,7 @@ export const useChatStore = create<ChatStore>()(
             }
           }
         })),
-      completeTransfer: ({ messageId, transferId, objectUrl, savePath }) =>
+      completeTransfer: ({ messageId, transferId, objectUrl, savePath, sha256 }) =>
         set((state) => ({
           messages: state.messages.map((message) =>
             message.id === messageId
@@ -192,7 +192,8 @@ export const useChatStore = create<ChatStore>()(
                         ...message.asset,
                         progress: 100,
                         previewUrl: objectUrl || message.asset.previewUrl,
-                        savePath: savePath || message.asset.savePath
+                        savePath: savePath || message.asset.savePath,
+                        sha256: sha256 || message.asset.sha256
                       }
                     : message.asset
                 }
@@ -203,7 +204,8 @@ export const useChatStore = create<ChatStore>()(
             [transferId]: {
               ...(state.transferStates[transferId] ?? { transferId, progress: 100 }),
               status: "received",
-              progress: 100
+              progress: 100,
+              sha256: sha256 || state.transferStates[transferId]?.sha256
             }
           }
         })),

@@ -172,6 +172,13 @@ describe("chatStore", () => {
     expect(useChatStore.getState().messages[0]).toMatchObject({ status: "received", progress: 100, asset: { savePath: "/tmp/a.pdf" } });
   });
 
+  test("stores late transfer hash when a transfer completes", () => {
+    useChatStore.getState().receivePeerAsset({ id: "asset_msg", transferId: "tr_1", senderId: "peer", senderName: "Taro", createdAt: 1, kind: "file", name: "a.pdf", size: 42, mime: "application/pdf" });
+    useChatStore.getState().completeTransfer({ messageId: "asset_msg", transferId: "tr_1", sha256: "verified-hash" });
+    expect(useChatStore.getState().messages[0].asset?.sha256).toBe("verified-hash");
+    expect(useChatStore.getState().transferStates.tr_1.sha256).toBe("verified-hash");
+  });
+
   test("fails transfers with error details", () => {
     useChatStore.getState().receivePeerAsset({ id: "asset_msg", transferId: "tr_1", senderId: "peer", senderName: "Taro", createdAt: 1, kind: "file", name: "a.pdf", size: 42, mime: "application/pdf" });
     useChatStore.getState().failTransfer({ messageId: "asset_msg", transferId: "tr_1", message: "network" });

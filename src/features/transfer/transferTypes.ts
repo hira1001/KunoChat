@@ -37,8 +37,8 @@ export type ChunkHeader = {
 };
 
 export const TRANSFER_LIMITS = {
-  chunkSize: 128 * 1024,
+  chunkSize: 256 * 1024,
   maxBufferedAmount: 8 * 1024 * 1024,
-  bufferedAmountLowThreshold: 2 * 1024 * 1024,
+  bufferedAmountLowThreshold: 1 * 1024 * 1024,
   instantControlTimeoutMs: 500
 } as const;

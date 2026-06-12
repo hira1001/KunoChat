@@ -14,8 +14,8 @@ Every desktop build should pass:
 
 The current local evidence is:
 
-- Vitest: 140 passed.
-- Cargo: 28 passed.
+- Vitest: 145 passed.
+- Cargo: 34 passed.
 - TypeScript: passed.
 - Vite production build: passed.
 - Tauri macOS release bundle: passed.

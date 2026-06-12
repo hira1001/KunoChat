@@ -1,13 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket as StdUdpSocket},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{async_runtime, AppHandle, Emitter};
 use tokio::{net::UdpSocket, time};
 
 const DISCOVERY_PORT: u16 = 8788;
 const SIGNALING_PORT: u16 = 8787;
+const REEMIT_AFTER: Duration = Duration::from_secs(3);
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,7 +53,7 @@ async fn run_discovery(app: AppHandle) -> Result<(), String> {
     .map_err(|error| error.to_string())?;
     let mut interval = time::interval(Duration::from_millis(900));
     let mut buffer = [0_u8; 512];
-    let mut last_peer = String::new();
+    let mut last_peer: Option<(String, Instant)> = None;
 
     loop {
         tokio::select! {
@@ -88,10 +89,10 @@ async fn run_discovery(app: AppHandle) -> Result<(), String> {
                 };
                 let mode = if server_ip == local_ip { "host" } else { "join" };
                 let dedupe_key = format!("{server_ip}:{room_id}:{mode}");
-                if dedupe_key == last_peer {
+                if !should_emit_peer(&last_peer, &dedupe_key, Instant::now()) {
                     continue;
                 }
-                last_peer = dedupe_key;
+                last_peer = Some((dedupe_key, Instant::now()));
 
                 let _ = app.emit(
                     "kuno:auto-connect",
@@ -105,6 +106,13 @@ async fn run_discovery(app: AppHandle) -> Result<(), String> {
                 );
             }
         }
+    }
+}
+
+fn should_emit_peer(last_peer: &Option<(String, Instant)>, dedupe_key: &str, now: Instant) -> bool {
+    match last_peer {
+        Some((last_key, last_seen)) if last_key == dedupe_key => now.duration_since(*last_seen) >= REEMIT_AFTER,
+        _ => true,
     }
 }
 
@@ -197,5 +205,26 @@ mod tests {
                 "source": "lan"
             })
         );
+    }
+
+    #[test]
+    fn should_emit_new_peer_immediately() {
+        let now = Instant::now();
+        let last_peer = Some(("old".to_string(), now));
+        assert!(should_emit_peer(&last_peer, "new", now));
+    }
+
+    #[test]
+    fn should_suppress_same_peer_until_reemit_window() {
+        let now = Instant::now();
+        let last_peer = Some(("same".to_string(), now));
+        assert!(!should_emit_peer(&last_peer, "same", now + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn should_reemit_same_peer_after_reemit_window() {
+        let now = Instant::now();
+        let last_peer = Some(("same".to_string(), now));
+        assert!(should_emit_peer(&last_peer, "same", now + REEMIT_AFTER));
     }
 }

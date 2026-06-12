@@ -444,7 +444,7 @@ async function sendRealtimeMessage(message: ChatMessage) {
   }
 
   if ((message.kind === "file" || message.kind === "image") && message.asset) {
-    const sha256 = await sha256ForAsset(message.asset);
+    const sha256 = sha256ForAsset(message.asset);
     await realtimeClient.sendAsset(
       {
         id: message.asset.id,
@@ -456,17 +456,17 @@ async function sendRealtimeMessage(message: ChatMessage) {
         kind: message.asset.kind,
         name: message.asset.name,
         size: message.asset.size,
-        mime: message.asset.mime,
-        sha256
+        mime: message.asset.mime
       },
-      createBinarySource(message.asset)
+      createBinarySource(message.asset),
+      { sha256 }
     );
     return;
   }
 
   if (message.kind === "bundle" && message.bundle) {
     for (const item of message.bundle.items) {
-      const sha256 = await sha256ForAsset(item);
+      const sha256 = sha256ForAsset(item);
       await realtimeClient.sendAsset(
         {
           id: item.id,
@@ -479,10 +479,10 @@ async function sendRealtimeMessage(message: ChatMessage) {
           name: item.name,
           size: item.size,
           mime: item.mime,
-          sha256,
           caption: message.bundle.caption
         },
-        createBinarySource(item)
+        createBinarySource(item),
+        { sha256 }
       );
     }
     return;
@@ -508,7 +508,7 @@ function createBinarySource(asset: NonNullable<ChatMessage["asset"]> | NonNullab
 
 async function persistReceivedAsset(
   input: { id: string; transferId: string; objectUrl: string; blob: Blob; meta: RealtimeAssetMeta },
-  completeTransfer: (payload: { messageId: string; transferId: string; objectUrl?: string; savePath?: string }) => void,
+  completeTransfer: (payload: { messageId: string; transferId: string; objectUrl?: string; savePath?: string; sha256?: string }) => void,
   failTransfer: (payload: { messageId: string; transferId: string; message: string }) => void
 ) {
   try {
@@ -525,7 +525,8 @@ async function persistReceivedAsset(
         messageId: input.id,
         transferId: input.transferId,
         objectUrl: input.objectUrl,
-        savePath
+        savePath,
+        sha256: input.meta.sha256
       });
       await platformAdapter.showNotification({
         title: "KunoChat",

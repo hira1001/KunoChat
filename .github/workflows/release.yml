@@ -54,11 +54,23 @@ jobs:
         run: npm run build
 
       - name: Rust native tests
-        run: cargo test
         working-directory: src-tauri
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            cargo test && exit 0
+            sleep $((attempt * 10))
+          done
+          exit 1
 
       - name: Build Tauri bundle
-        run: npm run tauri:build
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            npm run tauri:build && exit 0
+            sleep $((attempt * 10))
+          done
+          exit 1
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4

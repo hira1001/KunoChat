@@ -17,17 +17,22 @@ export function MessageList({ messages, connectionStatus, peerName, showTyping =
   }, [messages.length, showTyping]);
 
   return (
-    <div ref={scrollRef} className="kuno-scrollbar flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-4">
-      <div className="mx-auto rounded-pill border border-border bg-white px-2.5 py-1 text-[11px] text-faint">
+    <div
+      ref={scrollRef}
+      className="kuno-scrollbar flex min-h-0 w-full min-w-0 max-w-full flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden px-3.5 py-4"
+    >
+      <div className="mx-auto rounded-pill border border-border bg-white/90 px-2.5 py-1 text-[11px] font-medium text-faint shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
         Today
       </div>
       {messages.length === 0 ? (
-        <div className="grid flex-1 place-items-center text-center">
-          <div>
-            <div className="text-[14px] font-medium text-text">
+        <div className="flex w-full min-w-0 flex-1 items-center justify-center px-2 text-center">
+          <div
+            className="mx-auto w-full max-w-[280px] overflow-hidden rounded-[14px] border border-border bg-white/78 px-5 py-4 shadow-card"
+          >
+            <div className="truncate text-[14px] font-semibold text-text">
               {connectionStatus === "connected" ? "Drop something here" : "Pair your second PC"}
             </div>
-            <div className="mt-1 max-w-[240px] text-[12px] leading-5 text-muted">
+            <div className="mx-auto mt-1 max-w-[240px] break-words text-[12px] leading-5 text-muted">
               {connectionStatus === "connected"
                 ? "またはメッセージを送信"
                 : "接続が確立するまで、本文やファイルはこの端末から外へ送信されません。"}
@@ -48,15 +53,15 @@ function TypingIndicator({ peerName }: { peerName: string }) {
   const initial = peerName.trim().charAt(0).toUpperCase() || "K";
 
   return (
-    <div className="flex items-center gap-2">
-      <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-slate-100 text-[10px] font-semibold text-slate-400">
+    <div className="flex w-full min-w-0 items-center gap-2">
+      <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-border bg-white text-[10px] font-semibold text-muted shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
         {initial}
       </div>
-      <div className="flex h-8 items-center gap-1 rounded-[15px] border border-border bg-white px-3 shadow-card">
-        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-slate-400" />
-        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-slate-400 [animation-delay:120ms]" />
-        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-slate-400 [animation-delay:240ms]" />
-        <span className="ml-1 text-[11px] text-muted">入力中...</span>
+      <div className="flex h-8 min-w-0 items-center gap-1 rounded-[15px] border border-border bg-white px-3 shadow-card">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted" />
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:120ms]" />
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:240ms]" />
+        <span className="ml-1 truncate text-[11px] text-muted">入力中...</span>
       </div>
     </div>
   );

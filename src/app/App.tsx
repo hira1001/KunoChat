@@ -401,7 +401,7 @@ export function App() {
 
       {currentView === "main" ? (
         <div
-          className="relative flex h-full w-full flex-col"
+          className="relative flex h-full w-full min-w-0 max-w-full flex-col overflow-hidden"
           onDrop={handleDrop}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -589,11 +589,11 @@ function ConnectionBanner({
         : "border-blue-100 bg-blue-50 text-blue-700";
 
   return (
-    <div className={`mx-3 mt-3 rounded-[12px] border px-3 py-2 ${toneClass}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+    <div className={`mx-3 mt-3 max-w-[calc(100%-1.5rem)] overflow-hidden rounded-[12px] border px-3 py-2 ${toneClass}`}>
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
           <div className="text-[12px] font-semibold">{activeDiagnostic.title}</div>
-          <div className="mt-0.5 text-[11px] leading-4 opacity-90">{activeDiagnostic.detail}</div>
+          <div className="mt-0.5 break-words text-[11px] leading-4 opacity-90">{activeDiagnostic.detail}</div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <button type="button" onClick={onRetry} className="rounded-pill bg-white/80 px-2 py-1 text-[11px] font-medium shadow-sm">

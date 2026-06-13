@@ -31,7 +31,7 @@ export function StatusDot({ status, label, className }: StatusDotProps) {
     <span
       aria-label={label ?? status}
       title={label ?? status}
-      className={clsx("inline-flex h-2 w-2 shrink-0 rounded-full", statusClass[status], className)}
+      className={clsx("inline-flex h-2 w-2 shrink-0 rounded-full shadow-[0_0_0_2px_rgba(255,255,255,0.9)]", statusClass[status], className)}
     />
   );
 }

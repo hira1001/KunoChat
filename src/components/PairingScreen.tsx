@@ -20,37 +20,37 @@ export function PairingScreen({ status, signalingConfigured, pairingCode, signal
   }
 
   return (
-    <div className="flex h-full w-full flex-col bg-white">
-      <header className="flex h-11 shrink-0 items-center border-b border-border px-3">
+    <div className="flex h-full w-full min-w-0 max-w-full flex-col overflow-hidden bg-bg">
+      <header className="flex h-11 min-w-0 shrink-0 items-center overflow-hidden border-b border-border bg-white/96 px-3">
         <button
           type="button"
           aria-label="Back"
           onClick={onBack}
-          className="grid h-8 w-8 place-items-center rounded-pill text-slate-500 hover:bg-surface"
+          className="kuno-focus-ring grid h-8 w-8 place-items-center rounded-pill text-muted hover:bg-surface"
         >
           <ChevronLeft className="h-4 w-4" />
         </button>
-        <div className="ml-1 text-[14px] font-semibold text-text">
+        <div className="ml-1 min-w-0 truncate text-[14px] font-semibold text-text">
           KunoChat
         </div>
       </header>
-      <div className="kuno-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        <div className="mx-auto flex min-h-full max-w-[292px] flex-col justify-start sm:justify-center">
-          <div className="mx-auto grid h-7 w-7 shrink-0 place-items-center rounded-full bg-surface text-slate-500">
+      <div className="kuno-scrollbar min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-3">
+        <div className="mx-auto flex min-h-full w-full max-w-[292px] min-w-0 flex-col justify-start sm:justify-center">
+          <div className="mx-auto grid h-8 w-8 shrink-0 place-items-center rounded-full border border-border bg-white text-muted shadow-card">
             <UsersRound className="h-4 w-4" />
           </div>
           <div className="mt-2 text-center text-[16px] font-semibold text-text">ペアリング</div>
           <div className="mt-1 text-center text-[11px] text-muted">相手にあなたのコードを伝えてください</div>
-          <div className="mt-3 rounded-[12px] border border-border bg-white p-3 shadow-card">
+          <div className="mt-3 w-full min-w-0 overflow-hidden rounded-[13px] border border-border bg-white p-3 shadow-card">
             <div className="text-[11px] text-muted">あなたのコード</div>
             <div className="mt-2 flex min-w-0 items-center justify-between gap-2">
-              <span className="min-w-0 font-mono text-[20px] font-semibold tracking-[0.16em] text-text">{pairingCode}</span>
+              <span className="min-w-0 truncate font-mono text-[20px] font-semibold tracking-[0.16em] text-text">{pairingCode}</span>
               <button
                 type="button"
                 aria-label="Copy pairing code"
                 title="Copy pairing code"
                 onClick={handleCopyCode}
-                className="grid h-7 w-7 shrink-0 place-items-center rounded-pill text-slate-500 hover:bg-surface-hover"
+                className="kuno-focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-pill text-muted hover:bg-surface-hover"
               >
                 <Copy className="h-4 w-4" />
               </button>
@@ -64,18 +64,18 @@ export function PairingScreen({ status, signalingConfigured, pairingCode, signal
             value={friendCode}
             onChange={(event) => setFriendCode(formatPairingCode(event.target.value))}
             placeholder="6桁のコードを入力"
-            className="mt-1.5 h-9 rounded-[10px] border border-border bg-white px-3 text-[13px] outline-none focus:border-border-strong"
+            className="kuno-focus-ring mt-1.5 h-9 w-full rounded-[11px] border border-border bg-white px-3 text-[13px] outline-none focus:border-border-strong"
           />
           <button
             type="button"
             onClick={() => onConnect(friendCode)}
-            className="mt-2.5 flex h-10 items-center justify-center gap-2 rounded-[10px] bg-accent px-4 text-[13px] font-semibold text-white shadow-[0_10px_24px_rgba(37,99,235,0.22)] disabled:bg-surface-active disabled:text-faint disabled:shadow-none"
+            className="kuno-focus-ring mt-2.5 flex h-10 items-center justify-center gap-2 rounded-[11px] bg-accent px-4 text-[13px] font-semibold text-white shadow-[0_10px_24px_rgba(33,102,243,0.24)] transition enabled:hover:-translate-y-0.5 disabled:bg-surface-active disabled:text-faint disabled:shadow-none"
             disabled={!canConnect}
           >
             {status === "connecting" ? "接続中..." : "接続する"}
             <ArrowRight className="h-4 w-4" />
           </button>
-          <div className="mt-2.5 rounded-[10px] border border-border bg-surface px-3 py-1.5 text-center text-[11px] leading-4 text-muted">
+          <div className="mt-2.5 break-words rounded-[11px] border border-border bg-white/76 px-3 py-1.5 text-center text-[11px] leading-4 text-muted shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
             {pairingHelpText(status, signalingConfigured, signalingUrl)}
           </div>
         </div>

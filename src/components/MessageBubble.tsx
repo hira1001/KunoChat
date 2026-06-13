@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { Check, CheckCheck, Clock3, TriangleAlert, UserRound } from "lucide-react";
+import { Check, CheckCheck, Clock3, TriangleAlert } from "lucide-react";
 import { formatTime } from "../features/chat/format";
 import type { ChatMessage } from "../features/chat/messageTypes";
 import { BundleCard } from "./BundleCard";
@@ -15,19 +15,19 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   const isAsset = message.kind === "file" || message.kind === "image" || message.kind === "bundle";
 
   return (
-    <div className={clsx("flex w-full gap-2", mine ? "justify-end" : "justify-start")}>
+    <div className={clsx("kuno-message-enter flex w-full min-w-0 gap-2", mine ? "justify-end" : "justify-start")}>
       {!mine ? (
-        <div className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-400">
-          <UserRound className="h-4 w-4" />
+        <div className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-border bg-white text-[10px] font-semibold text-muted shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
+          {message.senderName.trim().charAt(0).toUpperCase() || "P"}
         </div>
       ) : null}
-      <div className={clsx("flex max-w-[82%] flex-col", mine ? "items-end" : "items-start", isAsset ? "w-[248px]" : "")}>
+      <div className={clsx("flex min-w-0 max-w-[82%] flex-col", mine ? "items-end" : "items-start", isAsset ? "w-[248px]" : "")}>
         {message.kind === "text" && message.text ? (
           <div
             className={clsx(
-              "rounded-[15px] px-3.5 py-2.5 text-[13px] leading-5 shadow-card",
+              "max-w-full break-words rounded-[16px] px-3.5 py-2.5 text-[13px] leading-5 shadow-card",
               mine
-                ? "bg-accent text-white"
+                ? "bg-accent text-white shadow-[0_10px_24px_rgba(33,102,243,0.22)]"
                 : "border border-border bg-white text-text"
             )}
           >
@@ -53,11 +53,11 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         ) : null}
 
         {message.kind === "system" ? (
-          <div className="rounded-pill border border-border bg-surface px-3 py-1.5 text-[12px] text-muted">
+          <div className="max-w-full break-words rounded-pill border border-border bg-white/80 px-3 py-1.5 text-[12px] text-muted shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
             {message.text?.text ?? "System update"}
           </div>
         ) : null}
-        <div className={clsx("mt-1 flex items-center gap-1 text-[10px] text-faint", mine ? "mr-1" : "ml-1")}>
+        <div className={clsx("mt-1 flex max-w-full items-center gap-1 truncate text-[10px] text-faint", mine ? "mr-1" : "ml-1")}>
           <span>{formatTime(message.createdAt)}</span>
           {mine ? <MessageStatusIcon status={message.status} /> : null}
         </div>

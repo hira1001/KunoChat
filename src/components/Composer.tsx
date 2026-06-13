@@ -28,51 +28,58 @@ export function Composer({ value, hasAttachments, disabled = false, onChange, on
   }
 
   return (
-    <div className="flex min-h-[56px] shrink-0 items-center gap-1.5 border-t border-border bg-white p-3">
-      <textarea
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={disabled ? "Pair first..." : "Message..."}
-        disabled={disabled}
-        rows={1}
-        className="max-h-24 min-h-9 flex-1 rounded-[12px] border border-border bg-white px-3 py-2 text-[13px] leading-5 text-text outline-none transition placeholder:text-faint focus:border-border-strong focus:bg-white disabled:bg-surface disabled:text-muted"
-      />
-      <button
-        type="button"
-        aria-label="Attach files"
-        title="Attach files"
-        onClick={onPickFiles}
-        disabled={disabled}
-        className="grid h-8 w-8 shrink-0 place-items-center rounded-pill text-slate-500 transition enabled:hover:bg-surface-hover enabled:hover:text-text disabled:text-faint"
+    <div className="w-full min-w-0 max-w-full shrink-0 overflow-hidden border-t border-border bg-white/96 p-3">
+      <div
+        className="grid min-h-[42px] w-full min-w-0 max-w-full items-end gap-1.5 overflow-hidden rounded-[17px] border border-border bg-white p-1.5 shadow-[0_10px_30px_rgba(16,24,40,0.07)]"
+        style={{ gridTemplateColumns: disabled ? "minmax(0, 1fr)" : "minmax(0, 1fr) 32px 32px 36px" }}
       >
-        <Plus className="h-4 w-4" />
-      </button>
-      <button
-        type="button"
-        aria-label="Attach from clipboard"
-        title="Attach from clipboard"
-        onClick={onPickFiles}
-        disabled={disabled}
-        className="grid h-8 w-8 shrink-0 place-items-center rounded-pill text-slate-500 transition enabled:hover:bg-surface-hover enabled:hover:text-text disabled:text-faint"
-      >
-        <Paperclip className="h-4 w-4" />
-      </button>
-      <button
-        type="button"
-        aria-label="Send"
-        title="Send"
-        onClick={onSend}
-        disabled={!canSend}
-        className={clsx(
-          "grid h-9 w-9 shrink-0 place-items-center rounded-full border transition enabled:hover:-translate-y-0.5",
-          canSend
-            ? "border-accent bg-accent text-white shadow-[0_8px_18px_rgba(37,99,235,0.28)]"
-            : "border-border bg-surface text-faint shadow-none"
-        )}
-      >
-        <SendHorizontal className="h-4 w-4" />
-      </button>
+        <textarea
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={disabled ? "Pair first..." : "Message..."}
+          disabled={disabled}
+          rows={1}
+          className="max-h-24 min-h-8 w-full min-w-0 rounded-[12px] border-0 bg-transparent px-2.5 py-1.5 text-[13px] leading-5 text-text outline-none transition placeholder:text-faint disabled:text-muted"
+        />
+        {!disabled ? (
+          <>
+            <button
+              type="button"
+              aria-label="Attach files"
+              title="Attach files"
+              onClick={onPickFiles}
+              className="kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-pill text-muted transition hover:bg-surface-hover hover:text-text"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              aria-label="Attach from clipboard"
+              title="Attach from clipboard"
+              onClick={onPickFiles}
+              className="kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-pill text-muted transition hover:bg-surface-hover hover:text-text"
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              aria-label="Send"
+              title="Send"
+              onClick={onSend}
+              disabled={!canSend}
+              className={clsx(
+                "kuno-focus-ring grid h-9 w-9 shrink-0 place-items-center rounded-full border transition enabled:hover:-translate-y-0.5 active:translate-y-0",
+                canSend
+                  ? "border-accent bg-accent text-white shadow-[0_8px_18px_rgba(37,99,235,0.28)]"
+                  : "border-border bg-surface text-faint shadow-none"
+              )}
+            >
+              <SendHorizontal className="h-4 w-4" />
+            </button>
+          </>
+        ) : null}
+      </div>
     </div>
   );
 }

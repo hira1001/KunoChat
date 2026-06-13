@@ -12,8 +12,11 @@ html,
 body,
 #root {
   min-height: 100%;
+  width: 100%;
+  max-width: 100%;
   margin: 0;
   background: var(--bg);
+  overflow: hidden;
 }
 
 body {
@@ -43,6 +46,42 @@ button {
 
 textarea {
   resize: none;
+}
+
+img,
+video,
+canvas,
+svg {
+  max-width: 100%;
+}
+
+::selection {
+  background: rgba(33, 102, 243, 0.16);
+}
+
+.kuno-focus-ring {
+  outline: none;
+}
+
+.kuno-focus-ring:focus-visible {
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 4px rgba(33, 102, 243, 0.32);
+}
+
+.kuno-message-enter {
+  animation: kuno-message-in 150ms ease-out both;
+}
+
+@keyframes kuno-message-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .kuno-scrollbar {

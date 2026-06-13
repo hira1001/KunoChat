@@ -12,25 +12,25 @@ type SettingsScreenProps = {
 
 export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, onClearHistory }: SettingsScreenProps) {
   return (
-    <div className="flex h-full w-full flex-col bg-white">
-      <header className="flex h-[52px] items-center border-b border-border px-4">
-        <div className="flex flex-1 items-center gap-2 text-[14px] font-semibold text-text">
-          KunoChat
+    <div className="flex h-full w-full min-w-0 max-w-full flex-col overflow-hidden bg-bg">
+      <header className="flex h-[52px] min-w-0 items-center overflow-hidden border-b border-border bg-white/96 px-4">
+        <div className="flex min-w-0 flex-1 items-center gap-2 text-[14px] font-semibold text-text">
+          <span className="min-w-0 truncate">KunoChat</span>
           <StatusDot status="connected" label="connected" />
         </div>
         <button
           type="button"
           aria-label="Close settings"
           onClick={onClose}
-          className="grid h-8 w-8 place-items-center rounded-pill text-muted hover:bg-surface-hover hover:text-text"
+          className="kuno-focus-ring grid h-8 w-8 place-items-center rounded-pill text-muted hover:bg-surface-hover hover:text-text"
         >
           <X className="h-4 w-4" />
         </button>
       </header>
-      <div className="kuno-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      <div className="kuno-scrollbar min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4">
         <div className="text-[18px] font-semibold text-text">設定</div>
         <div className="mt-5 text-[12px] font-semibold text-text">プロフィール</div>
-        <div className="mt-2 rounded-[12px] border border-border bg-white p-3 shadow-card">
+        <div className="mt-2 w-full min-w-0 overflow-hidden rounded-[13px] border border-border bg-white p-3 shadow-card">
           <label className="block text-[11px] font-medium text-muted" htmlFor="display-name">
             表示名
           </label>
@@ -38,7 +38,7 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
             id="display-name"
             value={settings.displayName}
             onChange={(event) => onChange({ displayName: event.target.value })}
-            className="mt-2 h-9 w-full rounded-[9px] border border-border bg-white px-3 text-[13px] outline-none focus:border-border-strong"
+            className="kuno-focus-ring mt-2 h-9 w-full rounded-[10px] border border-border bg-white px-3 text-[13px] outline-none focus:border-border-strong"
           />
         </div>
 
@@ -47,11 +47,11 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
           <button
             type="button"
             onClick={onPickSaveFolder}
-            className="mt-2 flex h-10 w-full items-center gap-2 rounded-[10px] border border-border bg-white px-3 text-left text-[12px] text-text shadow-card hover:bg-surface-hover"
+            className="kuno-focus-ring mt-2 flex h-10 w-full min-w-0 items-center gap-2 overflow-hidden rounded-[11px] border border-border bg-white px-3 text-left text-[12px] text-text shadow-card hover:bg-surface-hover"
           >
             <FolderOpen className="h-4 w-4 text-muted" />
             <span className="min-w-0 flex-1 truncate">{settings.saveFolder}</span>
-            <span className="text-[12px] text-text">変更</span>
+            <span className="shrink-0 text-[12px] text-text">変更</span>
           </button>
         </div>
 
@@ -64,9 +64,9 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
 
         <div className="mt-5">
           <div className="text-[12px] font-semibold text-text">ショートカット</div>
-          <div className="mt-2 flex h-10 items-center rounded-[10px] border border-border bg-white text-[12px] shadow-card">
+          <div className="mt-2 flex h-10 min-w-0 items-center overflow-hidden rounded-[11px] border border-border bg-white text-[12px] shadow-card">
             <div className="min-w-0 flex-1 truncate px-3 font-mono text-text">{settings.shortcut.replace("CommandOrControl", "Ctrl")}</div>
-            <button type="button" className="h-full border-l border-border px-3 text-[12px] text-text">
+            <button type="button" className="kuno-focus-ring h-full shrink-0 border-l border-border px-3 text-[12px] text-text hover:bg-surface-hover">
               変更
             </button>
           </div>
@@ -75,7 +75,7 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
         <button
           type="button"
           onClick={onClearHistory}
-          className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-[10px] border border-border bg-white text-[12px] font-semibold text-danger shadow-card hover:bg-red-50"
+          className="kuno-focus-ring mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-[11px] border border-border bg-white text-[12px] font-semibold text-danger shadow-card hover:bg-red-50"
         >
           <Trash2 className="h-4 w-4" />
           Clear history
@@ -93,15 +93,15 @@ type ToggleProps = {
 
 function Toggle({ label, checked, onChange }: ToggleProps) {
   return (
-    <label className="flex h-8 items-center justify-between">
-      <span className="text-[13px] text-text">{label}</span>
+    <label className="flex h-8 min-w-0 items-center justify-between gap-3">
+      <span className="min-w-0 truncate text-[13px] text-text">{label}</span>
       <input
         type="checkbox"
         checked={checked}
         onChange={(event) => onChange(event.target.checked)}
         className="peer sr-only"
       />
-      <span className={`relative h-5 w-9 rounded-full transition ${checked ? "bg-accent" : "bg-slate-300"}`}>
+      <span className={`relative h-5 w-9 shrink-0 rounded-full transition ${checked ? "bg-accent" : "bg-surface-active"}`}>
         <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition ${checked ? "translate-x-4" : ""}`} />
       </span>
     </label>

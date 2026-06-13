@@ -18,23 +18,23 @@ export function FileCard({ asset, status, progress, error }: FileCardProps) {
   const color = labelColor(label);
 
   return (
-    <div className="w-full rounded-[12px] border border-border bg-white p-3 shadow-card">
-      <div className="flex items-center gap-3">
+    <div className="w-full min-w-0 max-w-full overflow-hidden rounded-[13px] border border-border bg-white p-3 shadow-card">
+      <div className="flex min-w-0 items-center gap-3">
         <div
           className={clsx(
-            "grid h-10 w-10 shrink-0 place-items-center rounded-[10px] text-[9px] font-bold text-white shadow-sm",
+            "grid h-10 w-10 shrink-0 place-items-center rounded-[9px] text-[9px] font-bold text-white shadow-sm",
             color
           )}
         >
           {label}
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-medium text-text">{asset.name}</div>
-          <div className="mt-0.5 flex items-center gap-2 text-[12px] text-muted">
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <div className="truncate text-[13px] font-semibold text-text">{asset.name}</div>
+          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] text-muted">
             <span>{formatBytes(asset.size)}</span>
-            {verified ? <span className="text-success">· 検証済み</span> : null}
-            {status === "sending" ? <span>· 送信中...</span> : null}
-            {failed ? <span className="text-danger">· {error ?? "送信失敗"}</span> : null}
+            {verified ? <span className="text-success">検証済み</span> : null}
+            {status === "sending" ? <span>送信中...</span> : null}
+            {failed ? <span className="break-words text-danger">{error ?? "送信失敗"}</span> : null}
           </div>
         </div>
         {failed ? <AlertTriangle className="h-4 w-4 text-danger" /> : null}
@@ -47,7 +47,7 @@ export function FileCard({ asset, status, progress, error }: FileCardProps) {
           </div>
           <div className="h-1.5 overflow-hidden rounded-pill bg-surface-active">
             <div
-              className="h-full rounded-pill bg-accent transition-all duration-150"
+              className="h-full rounded-pill bg-accent transition-all duration-150 ease-out"
               style={{ width: `${Math.max(0, Math.min(100, activeProgress))}%` }}
             />
           </div>
@@ -62,7 +62,7 @@ function labelColor(label: string): string {
     return "bg-red-500";
   }
   if (label === "ZIP") {
-    return "bg-amber-400";
+    return "bg-amber-500";
   }
   if (label === "FIG") {
     return "bg-violet-500";

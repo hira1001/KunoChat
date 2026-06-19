@@ -52,11 +52,13 @@ export function App() {
     updateTransferProgress,
     completeTransfer,
     failTransfer,
+    cancelTransfer,
     setDraftText,
     addAttachments,
     removeAttachment,
     setDraggingOver,
     sendDraft,
+    cancelMessage,
     retryMessage,
     updateSettings,
     clearHistory
@@ -126,6 +128,8 @@ export function App() {
       },
       onAssetFailed: ({ id, transferId, message }) =>
         failTransfer({ messageId: id, transferId, message }),
+      onAssetCancelled: ({ id, transferId, message }) =>
+        cancelTransfer({ messageId: id, transferId, message }),
       onLocalAssetProgress: ({ id, transferId, progress }) =>
         updateTransferProgress({ messageId: id, transferId, progress }),
       onAck: (messageId) => markMessageStatus(messageId, "received"),
@@ -381,6 +385,14 @@ export function App() {
     });
   }
 
+  function handleCancelMessage(messageId: string) {
+    cancelMessage(messageId, (message, transferIds) => {
+      for (const transferId of transferIds) {
+        realtimeClient.cancelTransfer(message.id, transferId);
+      }
+    });
+  }
+
   return (
     <WindowShell
       mode={currentView}
@@ -431,6 +443,7 @@ export function App() {
             peerName={peerName}
             showTyping={peerTyping}
             onRetryMessage={(messageId) => void handleRetryMessage(messageId)}
+            onCancelMessage={handleCancelMessage}
           />
           <DropOverlay visible={isDraggingOver} />
           <AttachmentPreview attachments={attachments} onRemove={removeAttachment} />

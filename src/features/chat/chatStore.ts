@@ -26,6 +26,7 @@ type ChatStore = {
   markMessageStatus: (messageId: string, status: ChatMessage["status"]) => void;
   failMessage: (messageId: string, message: string, code?: string) => void;
   markInterruptedTransfers: (message?: string) => void;
+  cancelMessage: (messageId: string, notify?: (message: ChatMessage, transferIds: string[]) => void) => void;
   retryMessage: (messageId: string, transport?: (message: ChatMessage) => Promise<void> | void) => Promise<void>;
   receivePeerText: (input: { id: string; senderId: string; senderName: string; createdAt: number; text: string }) => void;
   receivePeerAsset: (input: {
@@ -43,6 +44,7 @@ type ChatStore = {
   updateTransferProgress: (input: { messageId: string; transferId: string; progress: number }) => void;
   completeTransfer: (input: { messageId: string; transferId: string; objectUrl?: string; savePath?: string; sha256?: string }) => void;
   failTransfer: (input: { messageId: string; transferId: string; message: string }) => void;
+  cancelTransfer: (input: { messageId: string; transferId: string; message?: string }) => void;
   setDraftText: (text: string) => void;
   addAttachments: (attachments: DraftAttachment[]) => void;
   removeAttachment: (id: string) => void;
@@ -129,6 +131,16 @@ export const useChatStore = create<ChatStore>()(
             transferStates: nextTransferStates
           };
         }),
+      cancelMessage: (messageId, notify) => {
+        const message = get().messages.find((chatMessage) => chatMessage.id === messageId);
+        if (!message || message.sender !== "me" || (message.status !== "sending" && message.status !== "queued")) {
+          return;
+        }
+
+        const transferIds = transferIdsForMessage(message);
+        notify?.(message, transferIds);
+        set((state) => cancelMessageState(state, messageId, "送信をキャンセルしました。"));
+      },
       retryMessage: async (messageId, transport) => {
         const { connectionStatus, messages } = get();
         const message = messages.find((chatMessage) => chatMessage.id === messageId);
@@ -164,6 +176,9 @@ export const useChatStore = create<ChatStore>()(
           await transport(retryingMessage);
           get().markMessageStatus(messageId, "sent");
         } catch (error) {
+          if (get().messages.find((chatMessage) => chatMessage.id === messageId)?.status === "cancelled") {
+            return;
+          }
           get().failMessage(messageId, error instanceof Error ? error.message : "再送に失敗しました。", "retry_failed");
         }
       },
@@ -360,6 +375,39 @@ export const useChatStore = create<ChatStore>()(
             }
           }
         })),
+      cancelTransfer: ({ messageId, transferId, message = "転送がキャンセルされました。" }) =>
+        set((state) => {
+          const target = state.messages.find((chatMessage) => chatMessage.id === messageId);
+          return {
+            messages: state.messages.map((chatMessage) =>
+              chatMessage.id === messageId
+                ? {
+                    ...chatMessage,
+                    status: "cancelled",
+                    error: {
+                      code: "transfer_cancelled",
+                      message
+                    },
+                    asset: chatMessage.asset ? { ...chatMessage.asset, progress: chatMessage.progress ?? chatMessage.asset.progress } : chatMessage.asset
+                  }
+                : chatMessage
+            ),
+            transferStates: {
+              ...state.transferStates,
+              [transferId]: {
+                ...(state.transferStates[transferId] ?? {
+                  transferId,
+                  progress: target?.progress ?? 0
+                }),
+                status: "cancelled",
+                error: {
+                  code: "transfer_cancelled",
+                  message
+                }
+              }
+            }
+          };
+        }),
       setDraftText: (draftText) => set({ draftText }),
       addAttachments: (attachments) =>
         set((state) => ({
@@ -416,6 +464,7 @@ export const useChatStore = create<ChatStore>()(
           status: optimisticStatus as ChatMessage["status"]
         };
 
+        const bundleTransferId = `tr_${now}`;
         const message: ChatMessage =
           attachments.length > 1 || (attachments.length === 1 && trimmed)
             ? {
@@ -425,8 +474,8 @@ export const useChatStore = create<ChatStore>()(
                   caption: trimmed || undefined,
                   count: attachments.length,
                   totalSize: attachments.reduce((total, attachment) => total + attachment.size, 0),
-                  transferId: `tr_${now}`,
-                  items: attachments.map((attachment) => ({
+                  transferId: bundleTransferId,
+                  items: attachments.map((attachment, index) => ({
                     id: attachment.id,
                     kind: attachment.kind,
                     name: attachment.name,
@@ -435,7 +484,7 @@ export const useChatStore = create<ChatStore>()(
                     localPath: attachment.localPath,
                     previewUrl: attachment.previewUrl,
                     file: attachment.file,
-                    transferId: `tr_${now}`
+                    transferId: `${bundleTransferId}_${index}`
                   }))
                 }
               }
@@ -480,6 +529,9 @@ export const useChatStore = create<ChatStore>()(
           await transport(message);
           get().markMessageStatus(message.id, "sent");
         } catch (error) {
+          if (get().messages.find((chatMessage) => chatMessage.id === message.id)?.status === "cancelled") {
+            return;
+          }
           get().failMessage(message.id, error instanceof Error ? error.message : "送信に失敗しました。", "send_failed");
         }
       },
@@ -564,6 +616,42 @@ function failMessageState(
             ...chatMessage,
             status: "failed",
             error: { code, message }
+          }
+        : chatMessage
+    ),
+    transferStates: nextTransferStates
+  };
+}
+
+function cancelMessageState(
+  state: Pick<ChatStore, "messages" | "transferStates">,
+  messageId: string,
+  message: string
+): Pick<ChatStore, "messages" | "transferStates"> {
+  const target = state.messages.find((chatMessage) => chatMessage.id === messageId);
+  if (!target) {
+    return {
+      messages: state.messages,
+      transferStates: state.transferStates
+    };
+  }
+
+  const nextTransferStates = { ...state.transferStates };
+  for (const transferId of transferIdsForMessage(target)) {
+    nextTransferStates[transferId] = {
+      ...(nextTransferStates[transferId] ?? { transferId, progress: target.progress ?? 0 }),
+      status: "cancelled",
+      error: { code: "transfer_cancelled", message }
+    };
+  }
+
+  return {
+    messages: state.messages.map((chatMessage) =>
+      chatMessage.id === messageId
+        ? {
+            ...chatMessage,
+            status: "cancelled",
+            error: { code: "transfer_cancelled", message }
           }
         : chatMessage
     ),

@@ -30,6 +30,20 @@ type SendAssetOptions = {
   sha256?: string | Promise<string | undefined> | undefined;
 };
 
+class TransferCancelledError extends Error {
+  constructor() {
+    super("Transfer cancelled.");
+    this.name = "TransferCancelledError";
+  }
+}
+
+type OutgoingTransfer = {
+  id: string;
+  messageId: string;
+  cancelled: boolean;
+  cancelNotified: boolean;
+};
+
 class KunoRealtimeClient {
   private callbacks?: RealtimeCallbacks;
   private options?: RealtimeConnectOptions;
@@ -43,6 +57,7 @@ class KunoRealtimeClient {
   private reconnectAttempts = 0;
   private manualDisconnect = false;
   private incomingTransfers = new Map<string, IncomingTransfer>();
+  private outgoingTransfers = new Map<string, OutgoingTransfer>();
 
   configure(callbacks: RealtimeCallbacks) {
     this.callbacks = callbacks;
@@ -72,6 +87,7 @@ class KunoRealtimeClient {
     this.clearReconnectTimer();
     this.closeTransport();
     this.incomingTransfers.clear();
+    this.outgoingTransfers.clear();
   }
 
   private closeTransport() {
@@ -140,6 +156,14 @@ class KunoRealtimeClient {
       throw new Error("Binary channel is not open.");
     }
 
+    const outgoingTransfer: OutgoingTransfer = {
+      id: meta.transferId,
+      messageId: meta.messageId,
+      cancelled: false,
+      cancelNotified: false
+    };
+    this.outgoingTransfers.set(meta.transferId, outgoingTransfer);
+
     const sha256Promise = Promise.resolve(options.sha256).catch(() => undefined);
     this.sendControl({ v: 1, type: "asset-start", asset: meta });
 
@@ -155,11 +179,14 @@ class KunoRealtimeClient {
       }
 
       while (offset < size) {
+        this.throwIfCancelled(outgoingTransfer);
         await this.waitForBinaryBuffer();
+        this.throwIfCancelled(outgoingTransfer);
         const bytes =
           source instanceof File
             ? await source.slice(offset, offset + chunkSize).arrayBuffer()
             : await source.readChunk(offset, chunkSize);
+        this.throwIfCancelled(outgoingTransfer);
         this.binary.send(encodeBinaryChunk(meta.transferId, bytes));
         offset += bytes.byteLength;
         const progress = size === 0 ? 100 : Math.min(100, Math.round((offset / size) * 100));
@@ -180,6 +207,7 @@ class KunoRealtimeClient {
       }
 
       const sha256 = await sha256Promise;
+      this.throwIfCancelled(outgoingTransfer);
       this.sendControl({
         v: 1,
         type: "asset-complete",
@@ -189,6 +217,11 @@ class KunoRealtimeClient {
         sha256
       });
     } catch (error) {
+      if (error instanceof TransferCancelledError) {
+        this.notifyTransferCancelledOnce(outgoingTransfer);
+        throw error;
+      }
+
       const message = error instanceof Error ? error.message : "Asset transfer failed.";
       try {
         this.sendControl({
@@ -202,7 +235,52 @@ class KunoRealtimeClient {
         // The instant channel may already be gone; the local retry state still handles recovery.
       }
       throw error;
+    } finally {
+      this.outgoingTransfers.delete(meta.transferId);
     }
+  }
+
+  cancelTransfer(messageId: string, transferId: string, message = "Transfer cancelled.") {
+    const outgoingTransfer =
+      this.outgoingTransfers.get(transferId) ??
+      ({
+        id: transferId,
+        messageId,
+        cancelled: false,
+        cancelNotified: false
+      } satisfies OutgoingTransfer);
+    if (outgoingTransfer) {
+      outgoingTransfer.cancelled = true;
+    }
+    this.notifyTransferCancelledOnce(outgoingTransfer, message);
+  }
+
+  private throwIfCancelled(transfer: OutgoingTransfer) {
+    if (transfer.cancelled) {
+      throw new TransferCancelledError();
+    }
+  }
+
+  private notifyTransferCancelled(messageId: string, transferId: string, message = "Transfer cancelled.") {
+    try {
+      this.sendControl({
+        v: 1,
+        type: "asset-cancelled",
+        id: messageId,
+        transferId,
+        message
+      });
+    } catch {
+      // Cancellation must be local-first; the peer may already be unreachable.
+    }
+  }
+
+  private notifyTransferCancelledOnce(transfer: OutgoingTransfer, message = "Transfer cancelled.") {
+    if (transfer.cancelNotified) {
+      return;
+    }
+    transfer.cancelNotified = true;
+    this.notifyTransferCancelled(transfer.messageId, transfer.id, message);
   }
 
   private async openSocket() {
@@ -461,6 +539,16 @@ class KunoRealtimeClient {
 
     if (message.type === "asset-failed") {
       this.callbacks?.onAssetFailed({
+        id: message.id,
+        transferId: message.transferId,
+        message: message.message
+      });
+      return;
+    }
+
+    if (message.type === "asset-cancelled") {
+      this.incomingTransfers.delete(message.transferId);
+      this.callbacks?.onAssetCancelled({
         id: message.id,
         transferId: message.transferId,
         message: message.message

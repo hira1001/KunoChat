@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { Check, CheckCheck, Clock3, RotateCcw, TriangleAlert } from "lucide-react";
+import { Check, CheckCheck, CircleX, Clock3, RotateCcw, TriangleAlert, X } from "lucide-react";
 import { formatTime } from "../features/chat/format";
 import type { ChatMessage } from "../features/chat/messageTypes";
 import { BundleCard } from "./BundleCard";
@@ -9,12 +9,14 @@ import { ImageCard } from "./ImageCard";
 type MessageBubbleProps = {
   message: ChatMessage;
   onRetry?: (messageId: string) => void;
+  onCancel?: (messageId: string) => void;
 };
 
-export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
+export function MessageBubble({ message, onRetry, onCancel }: MessageBubbleProps) {
   const mine = message.sender === "me";
   const isAsset = message.kind === "file" || message.kind === "image" || message.kind === "bundle";
   const canRetry = mine && (message.status === "failed" || message.status === "cancelled") && Boolean(onRetry);
+  const canCancel = mine && (message.status === "sending" || message.status === "queued") && Boolean(onCancel);
 
   return (
     <div className={clsx("kuno-message-enter flex w-full min-w-0 gap-2", mine ? "justify-end" : "justify-start")}>
@@ -62,6 +64,18 @@ export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
         <div className={clsx("mt-1 flex max-w-full flex-wrap items-center gap-1 text-[10px] text-faint", mine ? "mr-1 justify-end" : "ml-1")}>
           <span>{formatTime(message.createdAt)}</span>
           {mine ? <MessageStatusIcon status={message.status} /> : null}
+          {canCancel ? (
+            <button
+              type="button"
+              aria-label="Cancel send"
+              title="Cancel send"
+              onClick={() => onCancel?.(message.id)}
+              className="kuno-focus-ring ml-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-pill border border-border bg-white px-2 text-[10px] font-semibold text-muted shadow-[0_1px_2px_rgba(16,24,40,0.05)] transition hover:bg-surface-hover hover:text-text"
+            >
+              <X className="h-3 w-3" />
+              Cancel
+            </button>
+          ) : null}
           {canRetry ? (
             <button
               type="button"
@@ -102,6 +116,15 @@ function MessageStatusIcon({ status }: { status: ChatMessage["status"] }) {
     );
   }
 
+  if (status === "cancelled") {
+    return (
+      <span className="inline-flex items-center gap-0.5 text-faint">
+        <CircleX className="h-3 w-3" />
+        {statusLabel(status)}
+      </span>
+    );
+  }
+
   return null;
 }
 
@@ -118,6 +141,8 @@ function statusLabel(status: ChatMessage["status"]): string {
       return "Done";
     case "failed":
       return "Failed";
+    case "cancelled":
+      return "Cancelled";
     default:
       return status;
   }

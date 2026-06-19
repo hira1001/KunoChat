@@ -141,6 +141,14 @@ describe("chatStore", () => {
     expect(useChatStore.getState().messages[0]).toMatchObject({ kind: "bundle", bundle: { count: 2, totalSize: 34 } });
   });
 
+  test("assigns a unique transfer id to each bundled asset", async () => {
+    useChatStore.setState({ connectionStatus: "connected", attachments: [attachment({ id: "a" }), attachment({ id: "b", size: 10 })] });
+    await useChatStore.getState().sendDraft(vi.fn());
+
+    const items = useChatStore.getState().messages[0].bundle?.items ?? [];
+    expect(new Set(items.map((item) => item.transferId)).size).toBe(items.length);
+  });
+
   test("deduplicates received text by message id", () => {
     const input = { id: "peer_msg", senderId: "peer", senderName: "Taro", createdAt: 1, text: "hello" };
     useChatStore.getState().receivePeerText(input);
@@ -184,6 +192,77 @@ describe("chatStore", () => {
     useChatStore.getState().failTransfer({ messageId: "asset_msg", transferId: "tr_1", message: "network" });
     expect(useChatStore.getState().messages[0]).toMatchObject({ status: "failed", error: { message: "network" } });
     expect(useChatStore.getState().transferStates.tr_1).toMatchObject({ status: "failed", error: { message: "network" } });
+  });
+
+  test("cancels an incoming transfer with error details", () => {
+    useChatStore.getState().receivePeerAsset({ id: "asset_msg", transferId: "tr_1", senderId: "peer", senderName: "Taro", createdAt: 1, kind: "file", name: "a.pdf", size: 42, mime: "application/pdf" });
+    useChatStore.getState().cancelTransfer({ messageId: "asset_msg", transferId: "tr_1", message: "cancelled by peer" });
+
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      status: "cancelled",
+      error: { code: "transfer_cancelled", message: "cancelled by peer" }
+    });
+    expect(useChatStore.getState().transferStates.tr_1).toMatchObject({
+      status: "cancelled",
+      error: { code: "transfer_cancelled", message: "cancelled by peer" }
+    });
+  });
+
+  test("cancels an outgoing text message immediately", async () => {
+    useChatStore.setState({ connectionStatus: "connected", draftText: "hello" });
+    void useChatStore.getState().sendDraft(() => new Promise(() => undefined));
+    await Promise.resolve();
+
+    const messageId = useChatStore.getState().messages[0].id;
+    const notify = vi.fn();
+    useChatStore.getState().cancelMessage(messageId, notify);
+
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ id: messageId }), []);
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      status: "cancelled",
+      error: { code: "transfer_cancelled" }
+    });
+  });
+
+  test("cancels an outgoing file message and records transfer state", async () => {
+    useChatStore.setState({ connectionStatus: "connected", attachments: [attachment({ id: "file_1", localPath: "/tmp/doc.pdf" })] });
+    void useChatStore.getState().sendDraft(() => new Promise(() => undefined));
+    await Promise.resolve();
+
+    const message = useChatStore.getState().messages[0];
+    const transferId = message.asset?.transferId ?? "";
+    const notify = vi.fn();
+    useChatStore.getState().cancelMessage(message.id, notify);
+
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ id: message.id }), [transferId]);
+    expect(useChatStore.getState().messages[0]).toMatchObject({ status: "cancelled" });
+    expect(useChatStore.getState().transferStates[transferId]).toMatchObject({
+      status: "cancelled",
+      progress: 0,
+      error: { code: "transfer_cancelled" }
+    });
+  });
+
+  test("keeps a cancelled in-flight send from being overwritten by a late failure", async () => {
+    let rejectTransport!: (error: Error) => void;
+    useChatStore.setState({ connectionStatus: "connected", draftText: "hello" });
+    const sendPromise = useChatStore.getState().sendDraft(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectTransport = reject;
+        })
+    );
+    await Promise.resolve();
+
+    const messageId = useChatStore.getState().messages[0].id;
+    useChatStore.getState().cancelMessage(messageId);
+    rejectTransport(new Error("late network failure"));
+    await sendPromise;
+
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      status: "cancelled",
+      error: { code: "transfer_cancelled" }
+    });
   });
 
   test("marks interrupted outgoing messages as retryable failures", async () => {

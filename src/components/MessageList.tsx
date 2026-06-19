@@ -8,9 +8,17 @@ type MessageListProps = {
   peerName: string;
   showTyping?: boolean;
   onRetryMessage?: (messageId: string) => void;
+  onCancelMessage?: (messageId: string) => void;
 };
 
-export function MessageList({ messages, connectionStatus, peerName, showTyping = false, onRetryMessage }: MessageListProps) {
+export function MessageList({
+  messages,
+  connectionStatus,
+  peerName,
+  showTyping = false,
+  onRetryMessage,
+  onCancelMessage
+}: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -42,7 +50,9 @@ export function MessageList({ messages, connectionStatus, peerName, showTyping =
         </div>
       ) : (
         <>
-          {messages.map((message) => <MessageBubble key={message.id} message={message} onRetry={onRetryMessage} />)}
+          {messages.map((message) => (
+            <MessageBubble key={message.id} message={message} onRetry={onRetryMessage} onCancel={onCancelMessage} />
+          ))}
           {showTyping ? <TypingIndicator peerName={peerName} /> : null}
         </>
       )}

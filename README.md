@@ -87,6 +87,8 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 - Native path-backed reads for files selected with the `+` picker, tray Send File, or shortcut entrypoint.
 - File transfer metadata/progress/completion over `control`, chunks over `binary`.
 - Asset send failures notify the peer over `control` when the instant channel is still alive.
+- Active outgoing transfers can be cancelled inline; cancellation is local-first and is relayed to the peer over `control`.
+- Bundled files use independent transfer IDs so each binary stream can be tracked separately.
 - File integrity verification with SHA-256 metadata and receive-side hash checks.
 - Received files are saved locally under `Downloads/KunoChat` and keep their saved path for reveal/open flows.
 - Optimistic send UX: Send immediately renders locally, clears the composer, then updates `sending -> sent -> received`.
@@ -109,7 +111,7 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 ## Next Phases
 
 1. Add an optional public relay for remote networks where neither LAN nor Tailscale can reach the other computer.
-2. Add reconnect/session resume and resend for interrupted connections.
-3. Add transfer cancel/retry/resume controls.
+2. Add reconnect/session resume and byte-range resume for interrupted binary transfers.
+3. Add richer transfer controls for pausing, resuming, and per-file cancellation inside bundles.
 4. Run two-machine flaky-network and NAT traversal tests, adding TURN only when needed.
 5. Add publisher signing/notarization credentials for warning-free public distribution.

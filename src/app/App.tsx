@@ -46,6 +46,7 @@ export function App() {
     setConnectionStatus,
     setPeerTyping,
     markMessageStatus,
+    markInterruptedTransfers,
     receivePeerText,
     receivePeerAsset,
     updateTransferProgress,
@@ -56,6 +57,7 @@ export function App() {
     removeAttachment,
     setDraggingOver,
     sendDraft,
+    retryMessage,
     updateSettings,
     clearHistory
   } = useChatStore();
@@ -82,12 +84,14 @@ export function App() {
           setDiagnostic(undefined);
           setView("main");
         } else if (status === "reconnecting") {
+          markInterruptedTransfers();
           setDiagnostic({
             tone: "warning",
             title: "再接続中",
             detail: "相手PCまたはネットワークが一時的に途切れています。"
           });
         } else if (status === "offline") {
+          markInterruptedTransfers("相手がオフラインです。再接続後にRetryで再送できます。");
           setDiagnostic({
             tone: "warning",
             title: "相手がオフラインです",
@@ -135,6 +139,7 @@ export function App() {
       },
       onError: (message) => {
         setConnectionStatus("failed");
+        markInterruptedTransfers(connectionHelpText(message));
         setDiagnostic({
           tone: "danger",
           title: "接続できません",
@@ -370,6 +375,12 @@ export function App() {
     });
   }
 
+  async function handleRetryMessage(messageId: string) {
+    await retryMessage(messageId, async (message) => {
+      await sendRealtimeMessage(message);
+    });
+  }
+
   return (
     <WindowShell
       mode={currentView}
@@ -414,7 +425,13 @@ export function App() {
             onPair={() => setView("pairing")}
             onRetry={handleRetryAutoConnect}
           />
-          <MessageList messages={messages} connectionStatus={connectionStatus} peerName={peerName} showTyping={peerTyping} />
+          <MessageList
+            messages={messages}
+            connectionStatus={connectionStatus}
+            peerName={peerName}
+            showTyping={peerTyping}
+            onRetryMessage={(messageId) => void handleRetryMessage(messageId)}
+          />
           <DropOverlay visible={isDraggingOver} />
           <AttachmentPreview attachments={attachments} onRemove={removeAttachment} />
           <Composer

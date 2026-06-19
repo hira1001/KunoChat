@@ -86,9 +86,12 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 - WebRTC `binary` DataChannel for dropped/pasted file and image bodies.
 - Native path-backed reads for files selected with the `+` picker, tray Send File, or shortcut entrypoint.
 - File transfer metadata/progress/completion over `control`, chunks over `binary`.
+- Asset send failures notify the peer over `control` when the instant channel is still alive.
 - File integrity verification with SHA-256 metadata and receive-side hash checks.
 - Received files are saved locally under `Downloads/KunoChat` and keep their saved path for reveal/open flows.
 - Optimistic send UX: Send immediately renders locally, clears the composer, then updates `sending -> sent -> received`.
+- Interrupted outgoing sends become retryable failures instead of getting stuck in `sending`.
+- Failed/cancelled outgoing messages expose an inline Retry action and preserve local file references when available.
 - Teams-style typing indicator over the same instant control channel.
 - Connection-aware composer, drag/drop, paste, and picker behavior.
 - Drag & Drop and clipboard attachment parsing in the UI.

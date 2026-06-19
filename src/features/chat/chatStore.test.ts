@@ -108,7 +108,7 @@ describe("chatStore", () => {
   test("marks text failed when transport rejects", async () => {
     useChatStore.setState({ connectionStatus: "connected", draftText: "hello" });
     await useChatStore.getState().sendDraft(() => Promise.reject(new Error("nope")));
-    expect(useChatStore.getState().messages[0].status).toBe("failed");
+    expect(useChatStore.getState().messages[0]).toMatchObject({ status: "failed", error: { message: "nope" } });
   });
 
   test("clears draft after send", async () => {
@@ -184,6 +184,82 @@ describe("chatStore", () => {
     useChatStore.getState().failTransfer({ messageId: "asset_msg", transferId: "tr_1", message: "network" });
     expect(useChatStore.getState().messages[0]).toMatchObject({ status: "failed", error: { message: "network" } });
     expect(useChatStore.getState().transferStates.tr_1).toMatchObject({ status: "failed", error: { message: "network" } });
+  });
+
+  test("marks interrupted outgoing messages as retryable failures", async () => {
+    useChatStore.setState({ connectionStatus: "connected", draftText: "hello" });
+    void useChatStore.getState().sendDraft(() => new Promise(() => undefined));
+    await Promise.resolve();
+
+    useChatStore.getState().markInterruptedTransfers("lost link");
+
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      status: "failed",
+      error: { code: "connection_interrupted", message: "lost link" }
+    });
+  });
+
+  test("retries a failed text message", async () => {
+    useChatStore.setState({ connectionStatus: "connected", draftText: "hello" });
+    await useChatStore.getState().sendDraft(() => Promise.reject(new Error("offline")));
+    const messageId = useChatStore.getState().messages[0].id;
+    const transport = vi.fn();
+
+    await useChatStore.getState().retryMessage(messageId, transport);
+
+    expect(transport).toHaveBeenCalledWith(expect.objectContaining({ id: messageId, status: "sending" }));
+    expect(useChatStore.getState().messages[0]).toMatchObject({ status: "sent", error: undefined });
+  });
+
+  test("keeps failed retry visible when transport rejects again", async () => {
+    useChatStore.setState({ connectionStatus: "connected", draftText: "hello" });
+    await useChatStore.getState().sendDraft(() => Promise.reject(new Error("offline")));
+    const messageId = useChatStore.getState().messages[0].id;
+
+    await useChatStore.getState().retryMessage(messageId, () => Promise.reject(new Error("still offline")));
+
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      status: "failed",
+      error: { code: "retry_failed", message: "still offline" }
+    });
+  });
+
+  test("rejects asset retry when the local payload is no longer available", async () => {
+    useChatStore.setState({ connectionStatus: "connected", attachments: [attachment({ id: "file_1" })] });
+    await useChatStore.getState().sendDraft(() => Promise.reject(new Error("offline")));
+    const messageId = useChatStore.getState().messages[0].id;
+
+    await useChatStore.getState().retryMessage(messageId, vi.fn());
+
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      status: "failed",
+      error: { code: "payload_unavailable" }
+    });
+  });
+
+  test("retries a file message when a native local path is available", async () => {
+    useChatStore.setState({ connectionStatus: "connected", attachments: [attachment({ id: "file_1", localPath: "/tmp/doc.pdf" })] });
+    await useChatStore.getState().sendDraft(() => Promise.reject(new Error("offline")));
+    const messageId = useChatStore.getState().messages[0].id;
+    const transferId = useChatStore.getState().messages[0].asset?.transferId;
+    const transport = vi.fn();
+
+    await useChatStore.getState().retryMessage(messageId, transport);
+
+    expect(transport).toHaveBeenCalledWith(expect.objectContaining({ id: messageId, status: "sending" }));
+    expect(useChatStore.getState().messages[0]).toMatchObject({ status: "sent", asset: { localPath: "/tmp/doc.pdf" } });
+    expect(useChatStore.getState().transferStates[transferId!]).toMatchObject({ status: "sent", progress: 100, localPath: "/tmp/doc.pdf" });
+  });
+
+  test("resets a failed incoming asset when the peer retries the same message", () => {
+    const input = { id: "asset_msg", transferId: "tr_1", senderId: "peer", senderName: "Taro", createdAt: 1, kind: "file" as const, name: "a.pdf", size: 42, mime: "application/pdf" };
+    useChatStore.getState().receivePeerAsset(input);
+    useChatStore.getState().failTransfer({ messageId: "asset_msg", transferId: "tr_1", message: "network" });
+
+    useChatStore.getState().receivePeerAsset(input);
+
+    expect(useChatStore.getState().messages[0]).toMatchObject({ status: "receiving", progress: 0, error: undefined });
+    expect(useChatStore.getState().transferStates.tr_1).toMatchObject({ status: "receiving", progress: 0 });
   });
 
   test("updates settings without dropping existing values", () => {

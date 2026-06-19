@@ -149,44 +149,60 @@ class KunoRealtimeClient {
     let lastProgress = -1;
     let lastProgressAt = 0;
 
-    if (size === 0) {
-      this.callbacks?.onLocalAssetProgress({ id: meta.messageId, transferId: meta.transferId, progress: 100 });
-    }
+    try {
+      if (size === 0) {
+        this.callbacks?.onLocalAssetProgress({ id: meta.messageId, transferId: meta.transferId, progress: 100 });
+      }
 
-    while (offset < size) {
-      await this.waitForBinaryBuffer();
-      const bytes =
-        source instanceof File
-          ? await source.slice(offset, offset + chunkSize).arrayBuffer()
-          : await source.readChunk(offset, chunkSize);
-      this.binary.send(encodeBinaryChunk(meta.transferId, bytes));
-      offset += bytes.byteLength;
-      const progress = size === 0 ? 100 : Math.min(100, Math.round((offset / size) * 100));
-      this.callbacks?.onLocalAssetProgress({ id: meta.messageId, transferId: meta.transferId, progress });
-      const now = performance.now();
-      if (progress === 100 || progress - lastProgress >= 3 || now - lastProgressAt > 80) {
-        lastProgress = progress;
-        lastProgressAt = now;
+      while (offset < size) {
+        await this.waitForBinaryBuffer();
+        const bytes =
+          source instanceof File
+            ? await source.slice(offset, offset + chunkSize).arrayBuffer()
+            : await source.readChunk(offset, chunkSize);
+        this.binary.send(encodeBinaryChunk(meta.transferId, bytes));
+        offset += bytes.byteLength;
+        const progress = size === 0 ? 100 : Math.min(100, Math.round((offset / size) * 100));
+        this.callbacks?.onLocalAssetProgress({ id: meta.messageId, transferId: meta.transferId, progress });
+        const now = performance.now();
+        if (progress === 100 || progress - lastProgress >= 3 || now - lastProgressAt > 80) {
+          lastProgress = progress;
+          lastProgressAt = now;
+          this.sendControl({
+            v: 1,
+            type: "asset-progress",
+            id: meta.messageId,
+            transferId: meta.transferId,
+            progress,
+            receivedBytes: offset
+          });
+        }
+      }
+
+      const sha256 = await sha256Promise;
+      this.sendControl({
+        v: 1,
+        type: "asset-complete",
+        id: meta.messageId,
+        transferId: meta.transferId,
+        objectUrl: "",
+        sha256
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Asset transfer failed.";
+      try {
         this.sendControl({
           v: 1,
-          type: "asset-progress",
+          type: "asset-failed",
           id: meta.messageId,
           transferId: meta.transferId,
-          progress,
-          receivedBytes: offset
+          message
         });
+      } catch {
+        // The instant channel may already be gone; the local retry state still handles recovery.
       }
+      throw error;
     }
-
-    const sha256 = await sha256Promise;
-    this.sendControl({
-      v: 1,
-      type: "asset-complete",
-      id: meta.messageId,
-      transferId: meta.transferId,
-      objectUrl: "",
-      sha256
-    });
   }
 
   private async openSocket() {

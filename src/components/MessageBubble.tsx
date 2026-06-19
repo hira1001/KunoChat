@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { Check, CheckCheck, Clock3, TriangleAlert } from "lucide-react";
+import { Check, CheckCheck, Clock3, RotateCcw, TriangleAlert } from "lucide-react";
 import { formatTime } from "../features/chat/format";
 import type { ChatMessage } from "../features/chat/messageTypes";
 import { BundleCard } from "./BundleCard";
@@ -8,11 +8,13 @@ import { ImageCard } from "./ImageCard";
 
 type MessageBubbleProps = {
   message: ChatMessage;
+  onRetry?: (messageId: string) => void;
 };
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
   const mine = message.sender === "me";
   const isAsset = message.kind === "file" || message.kind === "image" || message.kind === "bundle";
+  const canRetry = mine && (message.status === "failed" || message.status === "cancelled") && Boolean(onRetry);
 
   return (
     <div className={clsx("kuno-message-enter flex w-full min-w-0 gap-2", mine ? "justify-end" : "justify-start")}>
@@ -57,9 +59,21 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             {message.text?.text ?? "System update"}
           </div>
         ) : null}
-        <div className={clsx("mt-1 flex max-w-full items-center gap-1 truncate text-[10px] text-faint", mine ? "mr-1" : "ml-1")}>
+        <div className={clsx("mt-1 flex max-w-full flex-wrap items-center gap-1 text-[10px] text-faint", mine ? "mr-1 justify-end" : "ml-1")}>
           <span>{formatTime(message.createdAt)}</span>
           {mine ? <MessageStatusIcon status={message.status} /> : null}
+          {canRetry ? (
+            <button
+              type="button"
+              aria-label="Retry send"
+              title="Retry send"
+              onClick={() => onRetry?.(message.id)}
+              className="kuno-focus-ring ml-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-pill border border-red-100 bg-white px-2 text-[10px] font-semibold text-danger shadow-[0_1px_2px_rgba(16,24,40,0.05)] transition hover:bg-red-50"
+            >
+              <RotateCcw className="h-3 w-3" />
+              Retry
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

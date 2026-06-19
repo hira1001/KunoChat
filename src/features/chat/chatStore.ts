@@ -24,6 +24,9 @@ type ChatStore = {
   setConnectionStatus: (status: ConnectionStatus) => void;
   setPeerTyping: (isTyping: boolean) => void;
   markMessageStatus: (messageId: string, status: ChatMessage["status"]) => void;
+  failMessage: (messageId: string, message: string, code?: string) => void;
+  markInterruptedTransfers: (message?: string) => void;
+  retryMessage: (messageId: string, transport?: (message: ChatMessage) => Promise<void> | void) => Promise<void>;
   receivePeerText: (input: { id: string; senderId: string; senderName: string; createdAt: number; text: string }) => void;
   receivePeerAsset: (input: {
     id: string;
@@ -80,9 +83,90 @@ export const useChatStore = create<ChatStore>()(
       setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
       setPeerTyping: (peerTyping) => set({ peerTyping }),
       markMessageStatus: (messageId, status) =>
+        set((state) => {
+          const target = state.messages.find((message) => message.id === messageId);
+          const nextTransferStates = { ...state.transferStates };
+          if (target) {
+            for (const transferId of transferIdsForMessage(target)) {
+              nextTransferStates[transferId] = {
+                ...(nextTransferStates[transferId] ?? { transferId, progress: target.progress ?? 0 }),
+                status,
+                progress: status === "sent" || status === "received" || status === "saved" ? 100 : nextTransferStates[transferId]?.progress ?? target.progress ?? 0
+              };
+            }
+          }
+
+          return {
+            messages: state.messages.map((message) =>
+              message.id === messageId ? { ...message, status, error: status === "failed" ? message.error : undefined } : message
+            ),
+            transferStates: nextTransferStates
+          };
+        }),
+      failMessage: (messageId, message, code = "send_failed") =>
+        set((state) => failMessageState(state, messageId, message, code)),
+      markInterruptedTransfers: (message = "接続が中断されました。Retryで再送できます。") =>
+        set((state) => {
+          const interruptedIds = state.messages
+            .filter((chatMessage) => chatMessage.sender === "me" && (chatMessage.status === "sending" || chatMessage.status === "queued"))
+            .map((chatMessage) => chatMessage.id);
+
+          let nextMessages = state.messages;
+          let nextTransferStates = state.transferStates;
+          for (const messageId of interruptedIds) {
+            const failedState = failMessageState(
+              { messages: nextMessages, transferStates: nextTransferStates },
+              messageId,
+              message,
+              "connection_interrupted"
+            );
+            nextMessages = failedState.messages;
+            nextTransferStates = failedState.transferStates;
+          }
+
+          return {
+            messages: nextMessages,
+            transferStates: nextTransferStates
+          };
+        }),
+      retryMessage: async (messageId, transport) => {
+        const { connectionStatus, messages } = get();
+        const message = messages.find((chatMessage) => chatMessage.id === messageId);
+        if (!message || message.sender !== "me" || (message.status !== "failed" && message.status !== "cancelled")) {
+          return;
+        }
+
+        if (connectionStatus !== "connected") {
+          get().failMessage(messageId, "相手と再接続してから再送してください。", "not_connected");
+          return;
+        }
+
+        if (!isRetryableMessage(message)) {
+          get().failMessage(messageId, "このファイルは再送に必要なローカル参照がありません。もう一度選択してください。", "payload_unavailable");
+          return;
+        }
+
+        const retryingMessage = resetMessageForRetry(message);
         set((state) => ({
-          messages: state.messages.map((message) => (message.id === messageId ? { ...message, status } : message))
-        })),
+          messages: state.messages.map((chatMessage) => (chatMessage.id === messageId ? retryingMessage : chatMessage)),
+          transferStates: {
+            ...state.transferStates,
+            ...transferStatesForRetry(retryingMessage)
+          }
+        }));
+
+        if (!transport) {
+          get().failMessage(messageId, "送信経路が準備できていません。", "transport_missing");
+          return;
+        }
+
+        try {
+          await transport(retryingMessage);
+          get().markMessageStatus(messageId, "sent");
+        } catch (error) {
+          get().failMessage(messageId, error instanceof Error ? error.message : "再送に失敗しました。", "retry_failed");
+        }
+      },
       receivePeerText: (input) =>
         set((state) => {
           if (state.messages.some((message) => message.id === input.id)) {
@@ -115,8 +199,49 @@ export const useChatStore = create<ChatStore>()(
         }),
       receivePeerAsset: (input) =>
         set((state) => {
-          if (state.messages.some((message) => message.id === input.id)) {
+          const existingMessage = state.messages.find((message) => message.id === input.id);
+          if (existingMessage && existingMessage.status !== "failed" && existingMessage.status !== "receiving") {
             return state;
+          }
+
+          if (existingMessage) {
+            return {
+              messages: state.messages.map((message) =>
+                message.id === input.id
+                  ? {
+                      ...message,
+                      status: "receiving",
+                      progress: 0,
+                      error: undefined,
+                      asset: {
+                        id: input.id,
+                        kind: input.kind,
+                        name: input.name,
+                        size: input.size,
+                        mime: input.mime,
+                        sha256: input.sha256,
+                        transferId: input.transferId,
+                        progress: 0
+                      }
+                    }
+                  : message
+              ),
+              transferStates: {
+                ...state.transferStates,
+                [input.transferId]: {
+                  transferId: input.transferId,
+                  status: "receiving",
+                  progress: 0,
+                  size: input.size,
+                  mime: input.mime,
+                  sha256: input.sha256
+                }
+              },
+              settings: {
+                ...state.settings,
+                peerDisplayName: input.senderName
+              }
+            };
           }
 
           return {
@@ -347,15 +472,15 @@ export const useChatStore = create<ChatStore>()(
         }));
 
         if (!transport) {
-          get().markMessageStatus(message.id, "failed");
+          get().failMessage(message.id, "送信経路が準備できていません。", "transport_missing");
           return;
         }
 
         try {
           await transport(message);
           get().markMessageStatus(message.id, "sent");
-        } catch {
-          get().markMessageStatus(message.id, "failed");
+        } catch (error) {
+          get().failMessage(message.id, error instanceof Error ? error.message : "送信に失敗しました。", "send_failed");
         }
       },
       updateSettings: (settings) =>
@@ -406,6 +531,112 @@ function sanitizePersistedMessages(messages: unknown, fallback: ChatMessage[]): 
   }
 
   return messages.filter(isChatMessage);
+}
+
+function failMessageState(
+  state: Pick<ChatStore, "messages" | "transferStates">,
+  messageId: string,
+  message: string,
+  code: string
+): Pick<ChatStore, "messages" | "transferStates"> {
+  const target = state.messages.find((chatMessage) => chatMessage.id === messageId);
+  if (!target) {
+    return {
+      messages: state.messages,
+      transferStates: state.transferStates
+    };
+  }
+
+  const transferIds = transferIdsForMessage(target);
+  const nextTransferStates = { ...state.transferStates };
+  for (const transferId of transferIds) {
+    nextTransferStates[transferId] = {
+      ...(nextTransferStates[transferId] ?? { transferId, progress: target.progress ?? 0 }),
+      status: "failed",
+      error: { code, message }
+    };
+  }
+
+  return {
+    messages: state.messages.map((chatMessage) =>
+      chatMessage.id === messageId
+        ? {
+            ...chatMessage,
+            status: "failed",
+            error: { code, message }
+          }
+        : chatMessage
+    ),
+    transferStates: nextTransferStates
+  };
+}
+
+function transferIdsForMessage(message: ChatMessage): string[] {
+  if (message.asset) {
+    return [message.asset.transferId];
+  }
+  if (message.bundle) {
+    return Array.from(new Set(message.bundle.items.map((item) => item.transferId)));
+  }
+  return [];
+}
+
+function isRetryableMessage(message: ChatMessage): boolean {
+  if (message.kind === "text") {
+    return Boolean(message.text?.text);
+  }
+  if (message.asset) {
+    return Boolean(message.asset.file || message.asset.localPath);
+  }
+  if (message.bundle) {
+    return message.bundle.items.every((item) => item.file || item.localPath);
+  }
+  return false;
+}
+
+function resetMessageForRetry(message: ChatMessage): ChatMessage {
+  return {
+    ...message,
+    status: "sending",
+    progress: 0,
+    error: undefined,
+    asset: message.asset ? { ...message.asset, progress: 0 } : message.asset,
+    bundle: message.bundle
+      ? {
+          ...message.bundle,
+          items: message.bundle.items.map((item) => ({ ...item, progress: 0 }))
+        }
+      : message.bundle
+  };
+}
+
+function transferStatesForRetry(message: ChatMessage): Record<string, TransferState> {
+  const states: Record<string, TransferState> = {};
+  if (message.asset) {
+    states[message.asset.transferId] = {
+      transferId: message.asset.transferId,
+      status: "sending",
+      progress: 0,
+      size: message.asset.size,
+      mime: message.asset.mime,
+      localPath: message.asset.localPath,
+      sha256: message.asset.sha256
+    };
+  }
+  if (message.bundle) {
+    for (const item of message.bundle.items) {
+      states[item.transferId] = {
+        transferId: item.transferId,
+        status: "sending",
+        progress: 0,
+        size: item.size,
+        mime: item.mime,
+        localPath: item.localPath,
+        sha256: item.sha256
+      };
+    }
+  }
+  return states;
 }
 
 function createLocalPeerId(): string {

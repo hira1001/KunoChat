@@ -19,7 +19,7 @@ export type ConnectionStatus =
   | "offline"
   | "failed";
 
-export type AppView = "mini" | "main" | "pairing" | "settings";
+export type AppView = "mini" | "main" | "pairing" | "settings" | "history";
 
 export type Sender = "me" | "peer" | "system";
 
@@ -61,6 +61,7 @@ export type AssetContent = {
   height?: number;
   sha256?: string;
   thumbnail?: string;
+  isFolder?: boolean;
 };
 
 export type BundleContent = {
@@ -102,6 +103,7 @@ export type DraftAttachment = {
   localPath?: string;
   previewUrl?: string;
   file?: File;
+  isFolder?: boolean;
 };
 
 export type TransferState = {
@@ -113,6 +115,10 @@ export type TransferState = {
   localPath?: string;
   sha256?: string;
   error?: TransferError;
+  speed?: number;
+  eta?: number;
+  lastProgressUpdate?: number;
+  transferredBytes?: number;
 };
 
 export type KunoSettings = {

@@ -9,6 +9,8 @@ import type {
   KunoSettings,
   TransferState
 } from "./messageTypes";
+import { dbService, type TransferHistoryItem } from "../storage/db";
+import { platformAdapter } from "../native/platformAdapter";
 
 type ChatStore = {
   storageVersion: number;
@@ -42,8 +44,9 @@ type ChatStore = {
     mime: string;
     sha256?: string;
     thumbnail?: string;
+    isFolder?: boolean;
   }) => void;
-  updateTransferProgress: (input: { messageId: string; transferId: string; progress: number }) => void;
+  updateTransferProgress: (input: { messageId: string; transferId: string; progress: number; receivedBytes?: number }) => void;
   completeTransfer: (input: { messageId: string; transferId: string; objectUrl?: string; savePath?: string; sha256?: string }) => void;
   failTransfer: (input: { messageId: string; transferId: string; message: string }) => void;
   cancelTransfer: (input: { messageId: string; transferId: string; message?: string }) => void;
@@ -56,6 +59,9 @@ type ChatStore = {
   updateSettings: (settings: Partial<KunoSettings>) => void;
   clearHistory: () => void;
   requestDownload: (messageId: string) => void;
+  history: TransferHistoryItem[];
+  loadHistory: () => Promise<void>;
+  clearHistoryList: () => Promise<void>;
 };
 
 const defaultSettings: KunoSettings = {
@@ -84,6 +90,7 @@ export const useChatStore = create<ChatStore>()(
       isDraggingOver: false,
       peerTyping: false,
       settings: defaultSettings,
+      history: [],
       setView: (currentView) => set({ currentView }),
       setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
       setPeerTyping: (peerTyping) => set({ peerTyping }),
@@ -217,6 +224,15 @@ export const useChatStore = create<ChatStore>()(
         }),
       receivePeerAsset: (input) =>
         set((state) => {
+          void dbService.logTransfer({
+            id: input.transferId,
+            name: input.name,
+            size: input.size,
+            direction: "in",
+            peerName: input.senderName,
+            status: "queued",
+            isFolder: input.isFolder
+          });
           const existingMessage = state.messages.find((message) => message.id === input.id);
           if (
             existingMessage &&
@@ -245,7 +261,8 @@ export const useChatStore = create<ChatStore>()(
                         sha256: input.sha256,
                         transferId: input.transferId,
                         progress: 0,
-                        thumbnail: input.thumbnail
+                        thumbnail: input.thumbnail,
+                        isFolder: input.isFolder
                       }
                     }
                   : message
@@ -289,7 +306,8 @@ export const useChatStore = create<ChatStore>()(
                   sha256: input.sha256,
                   transferId: input.transferId,
                   progress: 0,
-                  thumbnail: input.thumbnail
+                  thumbnail: input.thumbnail,
+                  isFolder: input.isFolder
                 }
               }
             ],
@@ -310,84 +328,193 @@ export const useChatStore = create<ChatStore>()(
             }
           };
         }),
-      updateTransferProgress: ({ messageId, transferId, progress }) =>
-        set((state) => ({
-          messages: state.messages.map((message) =>
-            message.id === messageId
-              ? {
-                  ...message,
-                  progress,
-                  asset: message.asset ? { ...message.asset, progress } : message.asset
-                }
-              : message
-          ),
-          transferStates: {
-            ...state.transferStates,
-            [transferId]: {
-              ...(state.transferStates[transferId] ?? { transferId, status: "receiving", progress: 0 }),
-              progress
-            }
-          }
-        })),
-      completeTransfer: ({ messageId, transferId, objectUrl, savePath, sha256 }) =>
-        set((state) => ({
-          messages: state.messages.map((message) =>
-            message.id === messageId
-              ? {
-                  ...message,
-                  status: message.sender === "me" ? "sent" : "received",
-                  progress: 100,
-                      asset: message.asset
-                    ? {
-                        ...message.asset,
-                        progress: 100,
-                        previewUrl: objectUrl || message.asset.previewUrl,
-                        savePath: savePath || message.asset.savePath,
-                        sha256: sha256 || message.asset.sha256
-                      }
-                    : message.asset
-                }
-              : message
-          ),
-          transferStates: {
-            ...state.transferStates,
-            [transferId]: {
-              ...(state.transferStates[transferId] ?? { transferId, progress: 100 }),
-              status: "received",
-              progress: 100,
-              sha256: sha256 || state.transferStates[transferId]?.sha256
-            }
-          }
-        })),
-      failTransfer: ({ messageId, transferId, message }) =>
-        set((state) => ({
-          messages: state.messages.map((chatMessage) =>
-            chatMessage.id === messageId
-              ? {
-                  ...chatMessage,
-                  status: "failed",
-                  error: {
-                    code: "transfer_failed",
-                    message
-                  }
-                }
-              : chatMessage
-          ),
-          transferStates: {
-            ...state.transferStates,
-            [transferId]: {
-              ...(state.transferStates[transferId] ?? { transferId, progress: 0 }),
-              status: "failed",
-              error: {
-                code: "transfer_failed",
-                message
+      updateTransferProgress: ({ messageId, transferId, progress, receivedBytes }) =>
+        set((state) => {
+          const now = Date.now();
+          const prev = state.transferStates[transferId];
+
+          let speed: number | undefined = prev?.speed;
+          let eta: number | undefined = prev?.eta;
+
+          if (prev && receivedBytes !== undefined && prev.transferredBytes !== undefined) {
+            const timeDiff = (now - (prev.lastProgressUpdate || now)) / 1000;
+            const byteDiff = receivedBytes - prev.transferredBytes;
+
+            if (timeDiff > 0.1 && byteDiff > 0) {
+              const currentSpeed = byteDiff / timeDiff;
+              speed = prev.speed ? prev.speed * 0.7 + currentSpeed * 0.3 : currentSpeed;
+
+              const remainingBytes = (prev.size || 0) - receivedBytes;
+              if (remainingBytes > 0 && speed > 0) {
+                eta = Math.round(remainingBytes / speed);
+              } else {
+                eta = 0;
               }
             }
           }
-        })),
+
+          return {
+            messages: state.messages.map((message) =>
+              message.id === messageId
+                ? {
+                    ...message,
+                    progress,
+                    asset: message.asset ? { ...message.asset, progress } : message.asset
+                  }
+                : message
+            ),
+            transferStates: {
+              ...state.transferStates,
+              [transferId]: {
+                ...(state.transferStates[transferId] ?? { transferId, status: "receiving", progress: 0 }),
+                progress,
+                speed,
+                eta,
+                lastProgressUpdate: now,
+                transferredBytes: receivedBytes
+              }
+            }
+          };
+        }),
+      completeTransfer: ({ messageId, transferId, objectUrl, savePath, sha256 }) =>
+        set((state) => {
+          const target = state.messages.find((message) => message.id === messageId);
+          if (target && target.asset && target.asset.transferId === transferId) {
+            void dbService.logTransfer({
+              id: transferId,
+              name: target.asset.name,
+              size: target.asset.size,
+              direction: target.sender === "me" ? "out" : "in",
+              peerName: target.sender === "me" ? (state.settings.peerDisplayName || "Peer") : target.senderName,
+              status: "completed",
+              savePath,
+              isFolder: target.asset.isFolder
+            });
+          } else if (target && target.bundle) {
+            const item = target.bundle.items.find((i) => i.transferId === transferId);
+            if (item) {
+              void dbService.logTransfer({
+                id: transferId,
+                name: item.name,
+                size: item.size,
+                direction: target.sender === "me" ? "out" : "in",
+                peerName: target.sender === "me" ? (state.settings.peerDisplayName || "Peer") : target.senderName,
+                status: "completed",
+                savePath,
+                isFolder: item.isFolder
+              });
+            }
+          }
+          return {
+            messages: state.messages.map((message) =>
+              message.id === messageId
+                ? {
+                    ...message,
+                    status: message.sender === "me" ? "sent" : "received",
+                    progress: 100,
+                    asset: message.asset
+                      ? {
+                          ...message.asset,
+                          progress: 100,
+                          previewUrl: objectUrl || message.asset.previewUrl,
+                          savePath: savePath || message.asset.savePath,
+                          sha256: sha256 || message.asset.sha256
+                        }
+                      : message.asset
+                  }
+                : message
+            ),
+            transferStates: {
+              ...state.transferStates,
+              [transferId]: {
+                ...(state.transferStates[transferId] ?? { transferId, progress: 100 }),
+                status: "received",
+                progress: 100,
+                sha256: sha256 || state.transferStates[transferId]?.sha256
+              }
+            }
+          };
+        }),
+      failTransfer: ({ messageId, transferId, message }) =>
+        set((state) => {
+          const target = state.messages.find((chatMessage) => chatMessage.id === messageId);
+          if (target && target.asset && target.asset.transferId === transferId) {
+            void dbService.logTransfer({
+              id: transferId,
+              name: target.asset.name,
+              size: target.asset.size,
+              direction: target.sender === "me" ? "out" : "in",
+              peerName: target.sender === "me" ? (state.settings.peerDisplayName || "Peer") : target.senderName,
+              status: "failed",
+              isFolder: target.asset.isFolder
+            });
+          } else if (target && target.bundle) {
+            const item = target.bundle.items.find((i) => i.transferId === transferId);
+            if (item) {
+              void dbService.logTransfer({
+                id: transferId,
+                name: item.name,
+                size: item.size,
+                direction: target.sender === "me" ? "out" : "in",
+                peerName: target.sender === "me" ? (state.settings.peerDisplayName || "Peer") : target.senderName,
+                status: "failed",
+                isFolder: item.isFolder
+              });
+            }
+          }
+          return {
+            messages: state.messages.map((chatMessage) =>
+              chatMessage.id === messageId
+                ? {
+                    ...chatMessage,
+                    status: "failed",
+                    error: {
+                      code: "transfer_failed",
+                      message
+                    }
+                  }
+                : chatMessage
+            ),
+            transferStates: {
+              ...state.transferStates,
+              [transferId]: {
+                ...(state.transferStates[transferId] ?? { transferId, progress: 0 }),
+                status: "failed",
+                error: {
+                  code: "transfer_failed",
+                  message
+                }
+              }
+            }
+          };
+        }),
       cancelTransfer: ({ messageId, transferId, message = "転送がキャンセルされました。" }) =>
         set((state) => {
           const target = state.messages.find((chatMessage) => chatMessage.id === messageId);
+          if (target && target.asset && target.asset.transferId === transferId) {
+            void dbService.logTransfer({
+              id: transferId,
+              name: target.asset.name,
+              size: target.asset.size,
+              direction: target.sender === "me" ? "out" : "in",
+              peerName: target.sender === "me" ? (state.settings.peerDisplayName || "Peer") : target.senderName,
+              status: "cancelled",
+              isFolder: target.asset.isFolder
+            });
+          } else if (target && target.bundle) {
+            const item = target.bundle.items.find((i) => i.transferId === transferId);
+            if (item) {
+              void dbService.logTransfer({
+                id: transferId,
+                name: item.name,
+                size: item.size,
+                direction: target.sender === "me" ? "out" : "in",
+                peerName: target.sender === "me" ? (state.settings.peerDisplayName || "Peer") : target.senderName,
+                status: "cancelled",
+                isFolder: item.isFolder
+              });
+            }
+          }
           return {
             messages: state.messages.map((chatMessage) =>
               chatMessage.id === messageId
@@ -524,6 +651,30 @@ export const useChatStore = create<ChatStore>()(
                   }
                 };
 
+        if (message.asset) {
+          void dbService.logTransfer({
+            id: message.asset.transferId,
+            name: message.asset.name,
+            size: message.asset.size,
+            direction: "out",
+            peerName: settings.peerDisplayName || "Peer",
+            status: "sending",
+            isFolder: message.asset.isFolder
+          });
+        } else if (message.bundle) {
+          for (const item of message.bundle.items) {
+            void dbService.logTransfer({
+              id: item.transferId,
+              name: item.name,
+              size: item.size,
+              direction: "out",
+              peerName: settings.peerDisplayName || "Peer",
+              status: "sending",
+              isFolder: item.isFolder
+            });
+          }
+        }
+
         set((state) => ({
           messages: [...state.messages, message],
           draftText: "",
@@ -550,9 +701,17 @@ export const useChatStore = create<ChatStore>()(
           settings: { ...state.settings, ...settings }
         })),
       clearHistory: () => set({ messages: [] }),
-      requestDownload: (messageId) => {
+      loadHistory: async () => {
+        const history = await dbService.getTransfersHistory();
+        set({ history });
+      },
+      clearHistoryList: async () => {
+        await dbService.clearTransfersHistory();
+        set({ history: [] });
+      },
+      requestDownload: async (messageId) => {
         const message = get().messages.find((m) => m.id === messageId);
-        if (!message || message.sender === "me" || message.status !== "queued") {
+        if (!message || message.sender === "me" || (message.status !== "queued" && message.status !== "failed")) {
           return;
         }
 
@@ -560,7 +719,8 @@ export const useChatStore = create<ChatStore>()(
 
         const transferIds = message.asset ? [message.asset.transferId] : (message.bundle?.items.map((i) => i.transferId) ?? []);
         for (const transferId of transferIds) {
-          realtimeClient.requestTransfer(messageId, transferId);
+          const byteOffset = await platformAdapter.getPartFileSize(transferId).catch(() => 0) || 0;
+          realtimeClient.requestTransfer(messageId, transferId, byteOffset);
         }
       }
     }),

@@ -8,12 +8,14 @@ type FileCardProps = {
   status: MessageStatus;
   progress?: number;
   error?: string;
+  speed?: number;
+  eta?: number;
   onPause?: () => void;
   onResume?: () => void;
   onDownload?: () => void;
 };
 
-export function FileCard({ asset, status, progress, error, onPause, onResume, onDownload }: FileCardProps) {
+export function FileCard({ asset, status, progress, error, speed, eta, onPause, onResume, onDownload }: FileCardProps) {
   const activeProgress = progress ?? asset.progress;
   const failed = status === "failed";
   const cancelled = status === "cancelled";
@@ -24,8 +26,23 @@ export function FileCard({ asset, status, progress, error, onPause, onResume, on
   const isActive = isSending || isReceiving;
   const isDone = status === "received" || status === "saved";
   const verified = Boolean(asset.sha256 && isDone);
-  const label = fileLabel(asset.name, asset.mime);
-  const color = labelColor(label);
+  const isFolder = asset.isFolder;
+  const label = isFolder ? "DIR" : fileLabel(asset.name, asset.mime);
+  const color = isFolder ? "bg-amber-600" : labelColor(label);
+
+  const formatSpeed = (bytesPerSec?: number) => {
+    if (!bytesPerSec) return "";
+    return `${formatBytes(bytesPerSec)}/s`;
+  };
+
+  const formatEta = (seconds?: number) => {
+    if (seconds === undefined) return "";
+    if (seconds === 0) return "完了間近";
+    if (seconds < 60) return `残り ${seconds}秒`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `残り ${mins}分${secs}秒`;
+  };
 
   return (
     <div
@@ -70,26 +87,34 @@ export function FileCard({ asset, status, progress, error, onPause, onResume, on
                   検証済み
                 </span>
               ) : null}
-              {isSending ? <span className="text-accent">送信中...</span> : null}
-              {isReceiving ? <span className="text-accent">受信中...</span> : null}
+              {isSending ? (
+                <span className="text-accent flex items-center gap-1.5">
+                  送信中... {speed ? <span>• {formatSpeed(speed)}</span> : null} {eta !== undefined ? <span>• {formatEta(eta)}</span> : null}
+                </span>
+              ) : null}
+              {isReceiving ? (
+                <span className="text-accent flex items-center gap-1.5">
+                  受信中... {speed ? <span>• {formatSpeed(speed)}</span> : null} {eta !== undefined ? <span>• {formatEta(eta)}</span> : null}
+                </span>
+              ) : null}
               {isPaused ? <span className="text-warning">一時停止中</span> : null}
               {isDownloadPending ? <span className="text-accent/80 font-medium">ダウンロード待ち</span> : null}
-              {failed ? <span className="break-words text-danger">{error ?? "送信失敗"}</span> : null}
+              {failed ? <span className="break-words text-danger">{error ?? "転送失敗"}</span> : null}
               {cancelled ? <span className="text-faint">キャンセル済み</span> : null}
             </div>
           </div>
 
           {/* Action buttons */}
           <div className="flex shrink-0 items-center gap-1">
-            {onDownload && isDownloadPending ? (
+            {onDownload && (isDownloadPending || failed) ? (
               <button
                 type="button"
-                aria-label="ダウンロードを開始"
+                aria-label={failed ? "転送を再開" : "ダウンロードを開始"}
                 onClick={onDownload}
                 className="kuno-focus-ring flex items-center gap-1 rounded-pill border border-accent bg-accent px-2.5 py-1 text-[11px] font-bold text-white shadow-sm transition-all duration-150 hover:bg-accent-hover active:scale-95"
               >
                 <Play className="h-3 w-3 fill-current" />
-                Download
+                {failed ? "Resume" : "Download"}
               </button>
             ) : null}
             {onPause && isActive ? (
@@ -112,7 +137,7 @@ export function FileCard({ asset, status, progress, error, onPause, onResume, on
                 <Play className="h-3 w-3" />
               </button>
             ) : null}
-            {failed ? <AlertTriangle className="h-4 w-4 text-danger" /> : null}
+            {failed && (!onDownload) ? <AlertTriangle className="h-4 w-4 text-danger" /> : null}
           </div>
         </div>
 

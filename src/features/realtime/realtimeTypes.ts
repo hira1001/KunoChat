@@ -30,6 +30,7 @@ export type RealtimeAssetMeta = {
   sha256?: string;
   caption?: string;
   thumbnail?: string;
+  isFolder?: boolean;
 };
 
 export type RealtimeBinarySource = {
@@ -41,7 +42,7 @@ export type RealtimeControlMessage =
   | ({ v: 1; type: "text" } & RealtimeTextPayload)
   | { v: 1; type: "ack"; id: string; receivedAt: number }
   | { v: 1; type: "asset-start"; asset: RealtimeAssetMeta }
-  | { v: 1; type: "request-transfer"; messageId: string; transferId: string }
+  | { v: 1; type: "request-transfer"; messageId: string; transferId: string; byteOffset?: number }
   | { v: 1; type: "asset-progress"; id: string; transferId: string; progress: number; receivedBytes: number }
   | { v: 1; type: "asset-complete"; id: string; transferId: string; objectUrl: string; sha256?: string }
   | { v: 1; type: "asset-failed"; id: string; transferId: string; message: string }
@@ -62,13 +63,13 @@ export type RealtimeCallbacks = {
   onPeer: (peer: RealtimePeer) => void;
   onText: (payload: RealtimeTextPayload) => void;
   onAssetStart: (asset: RealtimeAssetMeta) => void;
-  onAssetProgress: (input: { id: string; transferId: string; progress: number }) => void;
+  onAssetProgress: (input: { id: string; transferId: string; progress: number; receivedBytes?: number }) => void;
   onAssetComplete: (input: { id: string; transferId: string; objectUrl: string; blob?: Blob; meta?: RealtimeAssetMeta }) => void;
   onAssetFailed: (input: { id: string; transferId: string; message: string }) => void;
   onAssetCancelled: (input: { id: string; transferId: string; message?: string }) => void;
   onAssetPaused: (input: { id: string; transferId: string }) => void;
   onAssetResumed: (input: { id: string; transferId: string }) => void;
-  onLocalAssetProgress: (input: { id: string; transferId: string; progress: number }) => void;
+  onLocalAssetProgress: (input: { id: string; transferId: string; progress: number; receivedBytes?: number }) => void;
   onAck: (messageId: string) => void;
   onTyping: (input: { peerId: string; senderName: string; isTyping: boolean }) => void;
   onError: (message: string) => void;

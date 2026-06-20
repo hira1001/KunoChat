@@ -1,5 +1,6 @@
 import { runtimeConfig } from "../config/runtimeConfig";
 import { TRANSFER_LIMITS } from "../transfer/transferTypes";
+import { platformAdapter } from "../native/platformAdapter";
 import type {
   RealtimeCallbacks,
   RealtimeAssetMeta,
@@ -21,9 +22,10 @@ type ServerSignal =
 
 type IncomingTransfer = {
   meta: RealtimeAssetMeta;
-  chunks: BlobPart[];
+  chunks?: BlobPart[];
   receivedBytes: number;
   senderComplete: boolean;
+  writeQueue?: Promise<any>;
 };
 
 type SendAssetOptions = {
@@ -165,27 +167,32 @@ class KunoRealtimeClient {
     this.sendControl({ v: 1, type: "asset-start", asset: meta });
   }
 
-  requestTransfer(messageId: string, transferId: string) {
+  requestTransfer(messageId: string, transferId: string, byteOffset?: number) {
     try {
-      this.sendControl({ v: 1, type: "request-transfer", messageId, transferId });
+      this.sendControl({ v: 1, type: "request-transfer", messageId, transferId, byteOffset });
     } catch (err) {
       console.error("Failed to send request-transfer control message:", err);
     }
   }
 
-  private startPendingTransfer(transferId: string) {
+  private startPendingTransfer(transferId: string, byteOffset?: number) {
     const pending = this.pendingAssets.get(transferId);
     if (!pending) {
       console.warn("[realtimeClient] request-transfer received, but no pending asset found for transferId:", transferId);
       return;
     }
     this.pendingAssets.delete(transferId);
-    void this.executeTransfer(pending.meta, pending.source, pending.options).catch((err) => {
+    void this.executeTransfer(pending.meta, pending.source, pending.options, byteOffset).catch((err) => {
       console.error("Transfer execution failed:", err);
     });
   }
 
-  private async executeTransfer(meta: RealtimeAssetMeta, source: File | RealtimeBinarySource, options: SendAssetOptions) {
+  private async executeTransfer(
+    meta: RealtimeAssetMeta,
+    source: File | RealtimeBinarySource,
+    options: SendAssetOptions,
+    byteOffset: number = 0
+  ) {
     const outgoingTransfer: OutgoingTransfer = {
       id: meta.transferId,
       messageId: meta.messageId,
@@ -197,17 +204,23 @@ class KunoRealtimeClient {
     const sha256Promise = Promise.resolve(options.sha256).catch(() => undefined);
     
     // Notify local callback that transfer officially started
-    this.callbacks?.onLocalAssetProgress({ id: meta.messageId, transferId: meta.transferId, progress: 0 });
+    const initialProgress = source.size === 0 ? 100 : Math.min(100, Math.round((byteOffset / source.size) * 100));
+    this.callbacks?.onLocalAssetProgress({
+      id: meta.messageId,
+      transferId: meta.transferId,
+      progress: initialProgress,
+      receivedBytes: byteOffset
+    });
 
     const chunkSize = TRANSFER_LIMITS.chunkSize;
-    let offset = 0;
+    let offset = byteOffset;
     const size = source.size;
     let lastProgress = -1;
     let lastProgressAt = 0;
 
     try {
       if (size === 0) {
-        this.callbacks?.onLocalAssetProgress({ id: meta.messageId, transferId: meta.transferId, progress: 100 });
+        this.callbacks?.onLocalAssetProgress({ id: meta.messageId, transferId: meta.transferId, progress: 100, receivedBytes: 0 });
       }
 
       while (offset < size) {
@@ -230,7 +243,7 @@ class KunoRealtimeClient {
         this.binary.send(encodeBinaryChunk(meta.transferId, bytes));
         offset += bytes.byteLength;
         const progress = size === 0 ? 100 : Math.min(100, Math.round((offset / size) * 100));
-        this.callbacks?.onLocalAssetProgress({ id: meta.messageId, transferId: meta.transferId, progress });
+        this.callbacks?.onLocalAssetProgress({ id: meta.messageId, transferId: meta.transferId, progress, receivedBytes: offset });
         const now = performance.now();
         if (progress === 100 || progress - lastProgress >= 3 || now - lastProgressAt > 80) {
           lastProgress = progress;
@@ -626,9 +639,10 @@ class KunoRealtimeClient {
     }
 
     if (message.type === "asset-start") {
+      const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
       this.incomingTransfers.set(message.asset.transferId, {
         meta: message.asset,
-        chunks: [],
+        chunks: hasTauri ? undefined : [],
         receivedBytes: 0,
         senderComplete: false
       });
@@ -637,7 +651,7 @@ class KunoRealtimeClient {
     }
 
     if (message.type === "request-transfer") {
-      this.startPendingTransfer(message.transferId);
+      this.startPendingTransfer(message.transferId, message.byteOffset);
       return;
     }
 
@@ -645,7 +659,8 @@ class KunoRealtimeClient {
       this.callbacks?.onAssetProgress({
         id: message.id,
         transferId: message.transferId,
-        progress: message.progress
+        progress: message.progress,
+        receivedBytes: message.receivedBytes
       });
       return;
     }
@@ -655,7 +670,7 @@ class KunoRealtimeClient {
       if (transfer) {
         transfer.senderComplete = true;
         transfer.meta.sha256 = message.sha256;
-        this.completeIncomingTransferIfReady(message.transferId);
+        void this.completeIncomingTransferIfReady(message.transferId);
       }
       return;
     }
@@ -671,6 +686,10 @@ class KunoRealtimeClient {
 
     if (message.type === "asset-cancelled") {
       this.incomingTransfers.delete(message.transferId);
+      const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+      if (hasTauri) {
+        void platformAdapter.deletePartFile(message.transferId).catch(() => undefined);
+      }
       this.callbacks?.onAssetCancelled({
         id: message.id,
         transferId: message.transferId,
@@ -767,20 +786,47 @@ class KunoRealtimeClient {
       return;
     }
 
-    transfer.chunks.push(chunk.payload);
-    transfer.receivedBytes += chunk.payload.byteLength;
+    const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+    if (hasTauri) {
+      if (!transfer.writeQueue) {
+        transfer.writeQueue = Promise.resolve();
+      }
+      transfer.writeQueue = transfer.writeQueue.then(async () => {
+        try {
+          const newSize = await platformAdapter.writePartChunk(chunk.transferId, chunk.payload);
+          transfer.receivedBytes = newSize;
+        } catch (err) {
+          console.error("[realtimeClient] Failed to write part chunk:", err);
+          transfer.receivedBytes += chunk.payload.byteLength;
+        }
+      });
+    } else {
+      if (!transfer.chunks) {
+        transfer.chunks = [];
+      }
+      transfer.chunks.push(chunk.payload);
+      transfer.receivedBytes += chunk.payload.byteLength;
+    }
 
     const progress = transfer.meta.size === 0 ? 100 : Math.min(100, Math.round((transfer.receivedBytes / transfer.meta.size) * 100));
     this.callbacks?.onAssetProgress({
       id: transfer.meta.messageId,
       transferId: transfer.meta.transferId,
-      progress
+      progress,
+      receivedBytes: transfer.receivedBytes
     });
 
-    this.completeIncomingTransferIfReady(chunk.transferId);
+    if (hasTauri) {
+      transfer.writeQueue?.then(() => {
+        void this.completeIncomingTransferIfReady(chunk.transferId);
+      });
+    } else {
+      void this.completeIncomingTransferIfReady(chunk.transferId);
+    }
   }
 
-  private completeIncomingTransferIfReady(transferId: string) {
+  private async completeIncomingTransferIfReady(transferId: string) {
     const transfer = this.incomingTransfers.get(transferId);
     if (!transfer) {
       return;
@@ -789,16 +835,61 @@ class KunoRealtimeClient {
       return;
     }
 
-    const blob = new Blob(transfer.chunks, { type: transfer.meta.mime });
-    const objectUrl = URL.createObjectURL(blob);
     this.incomingTransfers.delete(transferId);
+
+    const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    let objectUrl = "";
+    let blob: Blob | undefined = undefined;
+    let savePath: string | undefined = undefined;
+
+    if (hasTauri) {
+      try {
+        if (transfer.writeQueue) {
+          await transfer.writeQueue;
+        }
+
+        savePath = await platformAdapter.finalizePartFile(transferId, transfer.meta.name);
+
+        if (transfer.meta.isFolder) {
+          try {
+            const lastSlash = savePath.lastIndexOf("/") !== -1 ? savePath.lastIndexOf("/") : savePath.lastIndexOf("\\");
+            const destDir = savePath.substring(0, lastSlash);
+            await platformAdapter.unzipFile(savePath, destDir);
+            savePath = savePath.replace(/\.zip$/i, "");
+          } catch (err) {
+            console.error("Failed to unzip folder:", err);
+            throw new Error("受信したフォルダの解凍に失敗しました。");
+          }
+        }
+
+        if (transfer.meta.kind === "image" || transfer.meta.mime.startsWith("image/")) {
+          const fileBytes = await platformAdapter.readEntireFile(savePath, transfer.meta.size);
+          blob = new Blob([fileBytes], { type: transfer.meta.mime });
+          objectUrl = URL.createObjectURL(blob);
+        }
+      } catch (err) {
+        console.error("[realtimeClient] Failed to finalize received asset:", err);
+        this.callbacks?.onAssetFailed({
+          id: transfer.meta.messageId,
+          transferId: transfer.meta.transferId,
+          message: err instanceof Error ? err.message : "ファイルの保存に失敗しました。"
+        });
+        return;
+      }
+    } else {
+      blob = new Blob(transfer.chunks ?? [], { type: transfer.meta.mime });
+      objectUrl = URL.createObjectURL(blob);
+    }
+
     this.callbacks?.onAssetComplete({
       id: transfer.meta.messageId,
       transferId: transfer.meta.transferId,
       objectUrl,
       blob,
-      meta: transfer.meta
-    });
+      meta: transfer.meta,
+      savePath
+    } as any);
+
     this.sendControl({
       v: 1,
       type: "ack",

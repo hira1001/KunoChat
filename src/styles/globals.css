@@ -252,6 +252,29 @@ svg {
   50%       { border-color: rgba(37, 99, 235, 1); }
 }
 
+/* ─── Sonar Radar pulsing ─── */
+@keyframes radar-pulse {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+.kuno-radar-ring {
+  animation: radar-pulse 3s cubic-bezier(0.21, 0.6, 0.35, 1) infinite;
+}
+.kuno-radar-ring-2 {
+  animation: radar-pulse 3s cubic-bezier(0.21, 0.6, 0.35, 1) infinite;
+  animation-delay: 1.0s;
+}
+.kuno-radar-ring-3 {
+  animation: radar-pulse 3s cubic-bezier(0.21, 0.6, 0.35, 1) infinite;
+  animation-delay: 2.0s;
+}
+
 /* ─── Reduced motion ─── */
 @media (prefers-reduced-motion: reduce) {
   *,

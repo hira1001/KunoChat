@@ -7,6 +7,7 @@ import { MessageList } from "../components/MessageList";
 import { PairingScreen } from "../components/PairingScreen";
 import { SettingsScreen } from "../components/SettingsScreen";
 import { WindowShell } from "../components/WindowShell";
+import { HistoryTab } from "../components/HistoryTab";
 import { useChatStore } from "../features/chat/chatStore";
 import { runtimeConfig } from "../features/config/runtimeConfig";
 import type { ChatMessage, DraftAttachment } from "../features/chat/messageTypes";
@@ -129,10 +130,22 @@ export function App() {
           thumbnail: asset.thumbnail
         });
       },
-      onAssetProgress: ({ id, transferId, progress }) =>
-        updateTransferProgress({ messageId: id, transferId, progress }),
-      onAssetComplete: ({ id, transferId, objectUrl, blob, meta }) => {
-        if (blob && meta) {
+      onAssetProgress: ({ id, transferId, progress, receivedBytes }) =>
+        updateTransferProgress({ messageId: id, transferId, progress, receivedBytes }),
+      onAssetComplete: ({ id, transferId, objectUrl, blob, meta, savePath }: any) => {
+        if (savePath) {
+          completeTransfer({
+            messageId: id,
+            transferId,
+            objectUrl,
+            savePath,
+            sha256: meta?.sha256
+          });
+          void platformAdapter.showNotification({
+            title: "KunoChat",
+            body: `${meta?.name.replace(/\.zip$/i, "")} を保存しました`
+          });
+        } else if (blob && meta) {
           void persistReceivedAsset({ id, transferId, objectUrl, blob, meta }, completeTransfer, failTransfer);
         } else {
           completeTransfer({ messageId: id, transferId, objectUrl });
@@ -146,8 +159,8 @@ export function App() {
         markMessageStatus(id, "queued"),
       onAssetResumed: ({ id, transferId }) =>
         markMessageStatus(id, "sending"),
-      onLocalAssetProgress: ({ id, transferId, progress }) =>
-        updateTransferProgress({ messageId: id, transferId, progress }),
+      onLocalAssetProgress: ({ id, transferId, progress, receivedBytes }) =>
+        updateTransferProgress({ messageId: id, transferId, progress, receivedBytes }),
       onAck: (messageId) => markMessageStatus(messageId, "received"),
       onTyping: ({ senderName, isTyping }) => {
         updateSettings({ peerDisplayName: senderName });
@@ -257,19 +270,22 @@ export function App() {
           const parsed = await Promise.all(
             paths.map(async (path, index) => {
               const fallbackName = path.split(/[\\/]/).pop() || `file-${index + 1}`;
-              const metadata = await platformAdapter.getFileMetadata(path).catch(() => ({
+              const metadata = await platformAdapter.pathMetadata(path).catch(() => ({
                 name: fallbackName,
-                size: 0
+                size: 0,
+                isDir: false
               }));
               const name = metadata.name || fallbackName;
-              const mime = platformAdapter.inferMime(name);
+              const isFolder = metadata.isDir;
+              const mime = isFolder ? "application/x-directory" : platformAdapter.inferMime(name);
               return {
                 id: `drop_native_${Date.now()}_${index}`,
                 kind: mime.startsWith("image/") ? "image" : "file",
                 name,
                 size: metadata.size,
                 mime,
-                localPath: path
+                localPath: path,
+                isFolder
               } as DraftAttachment;
             })
           );
@@ -488,6 +504,8 @@ export function App() {
           signalingConfigured={runtimeConfig.signalingConfigured}
           pairingCode={pairingCode}
           signalingUrl={runtimeConfig.signalingUrl}
+          displayName={settings.displayName || "You"}
+          peerDisplayName={peerName}
           onBack={() => setView("main")}
           onConnect={handleConnect}
         />
@@ -503,6 +521,10 @@ export function App() {
         />
       ) : null}
 
+      {currentView === "history" ? (
+        <HistoryTab />
+      ) : null}
+
       {currentView === "main" ? (
         <div
           className="relative flex h-full w-full min-w-0 max-w-full flex-col overflow-hidden"
@@ -511,7 +533,12 @@ export function App() {
           onDragLeave={handleDragLeave}
           onPaste={handlePaste}
         >
-          <Header status={connectionStatus} peerName={peerName} onSettings={() => setView("settings")} />
+          <Header
+            status={connectionStatus}
+            peerName={peerName}
+            onSettings={() => setView("settings")}
+            onHistory={() => setView("history")}
+          />
           <ConnectionBanner
             diagnostic={diagnostic}
             status={connectionStatus}
@@ -620,13 +647,35 @@ async function sendRealtimeMessage(message: ChatMessage) {
   }
 
   if ((message.kind === "file" || message.kind === "image") && message.asset) {
-    const sha256 = sha256ForAsset(message.asset);
-    let thumbnail: string | undefined = undefined;
-    if (message.asset.kind === "image" || message.asset.mime.startsWith("image/")) {
+    let localPath = message.asset.localPath;
+    let size = message.asset.size;
+
+    if (message.asset.isFolder) {
       try {
-        let blob: Blob | undefined = message.asset.file;
-        if (!blob && message.asset.localPath) {
-          blob = await readEntireFile(message.asset.localPath, message.asset.size);
+        const zipMeta = await platformAdapter.zipDirectory(message.asset.localPath!);
+        if (zipMeta.localPath) {
+          localPath = zipMeta.localPath;
+          size = zipMeta.size;
+        }
+      } catch (err) {
+        console.error("Failed to zip directory:", err);
+        throw new Error("フォルダの圧縮に失敗しました。");
+      }
+    }
+
+    const modifiedAsset = {
+      ...message.asset,
+      localPath,
+      size
+    };
+
+    const sha256 = sha256ForAsset(modifiedAsset);
+    let thumbnail: string | undefined = undefined;
+    if (modifiedAsset.kind === "image" || modifiedAsset.mime.startsWith("image/")) {
+      try {
+        let blob: Blob | undefined = modifiedAsset.file;
+        if (!blob && modifiedAsset.localPath) {
+          blob = await readEntireFile(modifiedAsset.localPath, modifiedAsset.size);
         }
         if (blob) {
           thumbnail = await generateThumbnail(blob);
@@ -638,19 +687,20 @@ async function sendRealtimeMessage(message: ChatMessage) {
 
     await realtimeClient.sendAsset(
       {
-        id: message.asset.id,
+        id: modifiedAsset.id,
         messageId: message.id,
-        transferId: message.asset.transferId,
+        transferId: modifiedAsset.transferId,
         senderId: message.senderId,
         senderName: message.senderName,
         createdAt: message.createdAt,
-        kind: message.asset.kind,
-        name: message.asset.name,
-        size: message.asset.size,
-        mime: message.asset.mime,
-        thumbnail
+        kind: modifiedAsset.kind,
+        name: modifiedAsset.name,
+        size: modifiedAsset.size,
+        mime: modifiedAsset.mime,
+        thumbnail,
+        isFolder: message.asset.isFolder
       },
-      createBinarySource(message.asset),
+      createBinarySource(modifiedAsset),
       { sha256 }
     );
     return;
@@ -658,13 +708,35 @@ async function sendRealtimeMessage(message: ChatMessage) {
 
   if (message.kind === "bundle" && message.bundle) {
     for (const item of message.bundle.items) {
-      const sha256 = sha256ForAsset(item);
-      let thumbnail: string | undefined = undefined;
-      if (item.kind === "image" || item.mime.startsWith("image/")) {
+      let localPath = item.localPath;
+      let size = item.size;
+
+      if (item.isFolder) {
         try {
-          let blob: Blob | undefined = item.file;
-          if (!blob && item.localPath) {
-            blob = await readEntireFile(item.localPath, item.size);
+          const zipMeta = await platformAdapter.zipDirectory(item.localPath!);
+          if (zipMeta.localPath) {
+            localPath = zipMeta.localPath;
+            size = zipMeta.size;
+          }
+        } catch (err) {
+          console.error("Failed to zip directory in bundle:", err);
+          throw new Error(`フォルダ ${item.name} の圧縮に失敗しました。`);
+        }
+      }
+
+      const modifiedItem = {
+        ...item,
+        localPath,
+        size
+      };
+
+      const sha256 = sha256ForAsset(modifiedItem);
+      let thumbnail: string | undefined = undefined;
+      if (modifiedItem.kind === "image" || modifiedItem.mime.startsWith("image/")) {
+        try {
+          let blob: Blob | undefined = modifiedItem.file;
+          if (!blob && modifiedItem.localPath) {
+            blob = await readEntireFile(modifiedItem.localPath, modifiedItem.size);
           }
           if (blob) {
             thumbnail = await generateThumbnail(blob);
@@ -676,20 +748,21 @@ async function sendRealtimeMessage(message: ChatMessage) {
 
       await realtimeClient.sendAsset(
         {
-          id: item.id,
+          id: modifiedItem.id,
           messageId: message.id,
-          transferId: item.transferId,
+          transferId: modifiedItem.transferId,
           senderId: message.senderId,
           senderName: message.senderName,
           createdAt: message.createdAt,
-          kind: item.kind,
-          name: item.name,
-          size: item.size,
-          mime: item.mime,
+          kind: modifiedItem.kind,
+          name: modifiedItem.name,
+          size: modifiedItem.size,
+          mime: modifiedItem.mime,
           caption: message.bundle.caption,
-          thumbnail
+          thumbnail,
+          isFolder: item.isFolder
         },
-        createBinarySource(item),
+        createBinarySource(modifiedItem),
         { sha256 }
       );
     }
@@ -729,16 +802,29 @@ async function persistReceivedAsset(
     }
     const savePath = await platformAdapter.saveReceivedFile(input.meta.name, bytes);
     if (savePath) {
+      let finalSavePath = savePath;
+      if (input.meta.isFolder) {
+        try {
+          const lastSlash = savePath.lastIndexOf("/") !== -1 ? savePath.lastIndexOf("/") : savePath.lastIndexOf("\\");
+          const destDir = savePath.substring(0, lastSlash);
+          await platformAdapter.unzipFile(savePath, destDir);
+          finalSavePath = savePath.replace(/\.zip$/i, "");
+        } catch (err) {
+          console.error("Failed to unzip folder:", err);
+          throw new Error("受信したフォルダの解凍に失敗しました。");
+        }
+      }
+
       completeTransfer({
         messageId: input.id,
         transferId: input.transferId,
         objectUrl: input.objectUrl,
-        savePath,
+        savePath: finalSavePath,
         sha256: input.meta.sha256
       });
       await platformAdapter.showNotification({
         title: "KunoChat",
-        body: `${input.meta.name} を保存しました`
+        body: `${input.meta.name.replace(/\.zip$/i, "")} を保存しました`
       });
     }
   } catch (error) {

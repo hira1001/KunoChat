@@ -1,4 +1,4 @@
-import { MoreHorizontal, Wifi, WifiOff } from "lucide-react";
+import { History, MoreHorizontal, Wifi, WifiOff } from "lucide-react";
 import type { ConnectionStatus } from "../features/chat/messageTypes";
 import { StatusDot } from "./StatusDot";
 
@@ -6,15 +6,16 @@ type HeaderProps = {
   status: ConnectionStatus;
   peerName: string;
   onSettings: () => void;
+  onHistory: () => void;
 };
 
-export function Header({ status, peerName, onSettings }: HeaderProps) {
+export function Header({ status, peerName, onSettings, onHistory }: HeaderProps) {
   const isOnline = status === "connected";
   const isReconnecting = status === "reconnecting" || status === "connecting";
 
   return (
     <header className="w-full min-w-0 max-w-full shrink-0 overflow-hidden border-b border-border bg-bg-glass backdrop-blur-[20px]">
-      {/* Top bar: Brand + settings */}
+      {/* Top bar: Brand + actions */}
       <div className="flex h-[44px] min-w-0 items-center gap-3 px-4">
         {/* Brand */}
         <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -25,17 +26,29 @@ export function Header({ status, peerName, onSettings }: HeaderProps) {
             KunoChat
           </span>
         </div>
-        {/* Settings button */}
-        <button
-          type="button"
-          id="header-settings-btn"
-          aria-label="Settings"
-          title="Settings"
-          onClick={onSettings}
-          className="kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-pill text-muted transition-all duration-150 hover:bg-surface-hover hover:text-text active:scale-95"
-        >
-          <MoreHorizontal className="h-4 w-4" />
-        </button>
+        {/* Header Actions */}
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            id="header-history-btn"
+            aria-label="History"
+            title="History"
+            onClick={onHistory}
+            className="kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-pill text-muted transition-all duration-150 hover:bg-surface-hover hover:text-text active:scale-95"
+          >
+            <History className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            id="header-settings-btn"
+            aria-label="Settings"
+            title="Settings"
+            onClick={onSettings}
+            className="kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-pill text-muted transition-all duration-150 hover:bg-surface-hover hover:text-text active:scale-95"
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       {/* Bottom bar: Peer info */}

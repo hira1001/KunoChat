@@ -7,11 +7,13 @@ type PairingScreenProps = {
   signalingConfigured: boolean;
   pairingCode: string;
   signalingUrl: string;
+  displayName: string;
+  peerDisplayName?: string;
   onBack: () => void;
   onConnect: (friendCode: string) => void;
 };
 
-export function PairingScreen({ status, signalingConfigured, pairingCode, signalingUrl, onBack, onConnect }: PairingScreenProps) {
+export function PairingScreen({ status, signalingConfigured, pairingCode, signalingUrl, displayName, peerDisplayName, onBack, onConnect }: PairingScreenProps) {
   const [friendCode, setFriendCode] = useState("");
   const [copied, setCopied] = useState(false);
   const canConnect = friendCode.trim().replace(/\D/g, "").length >= 6;
@@ -49,20 +51,53 @@ export function PairingScreen({ status, signalingConfigured, pairingCode, signal
       <div className="kuno-scrollbar min-h-0 w-full min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-5">
         <div className="mx-auto flex min-h-full w-full max-w-[292px] min-w-0 flex-col justify-start sm:justify-center">
 
-          {/* Icon + Title */}
-          <div className="kuno-fade-in text-center">
-            <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-accent-soft">
-              {isConnected ? (
-                <Wifi className="h-7 w-7 text-success" />
-              ) : isConnecting ? (
-                <Loader2 className="h-7 w-7 animate-spin text-accent" />
-              ) : (
-                <WifiOff className="h-7 w-7 text-accent" />
+          {/* Radar Scanner */}
+          <div className="kuno-fade-in text-center flex flex-col items-center">
+            <div className="relative flex h-40 w-full items-center justify-center overflow-hidden rounded-[18px]">
+              {/* Radar pulse circles */}
+              {!isConnected && (
+                <>
+                  <div className="absolute h-24 w-24 rounded-full border border-accent/20 bg-accent/5 kuno-radar-ring pointer-events-none" />
+                  <div className="absolute h-24 w-24 rounded-full border border-accent/15 bg-accent/5 kuno-radar-ring-2 pointer-events-none" />
+                  <div className="absolute h-24 w-24 rounded-full border border-accent/10 bg-accent/5 pointer-events-none" />
+                </>
+              )}
+
+              {/* Central Avatar: You */}
+              <div className="relative z-10 flex flex-col items-center">
+                <div className="grid h-14 w-14 place-items-center rounded-full bg-accent text-[18px] font-bold text-white shadow-[0_0_24px_var(--accent-glow)] transition-all duration-300">
+                  {displayName.trim().charAt(0).toUpperCase() || "Y"}
+                </div>
+                <div className="mt-1.5 text-[10px] font-semibold tracking-wide uppercase text-muted">あなた ({displayName})</div>
+              </div>
+
+              {/* Floating Peer Avatar if connecting/connected */}
+              {(isConnecting || isConnected) && (
+                <div 
+                  className={clsx(
+                    "absolute z-10 flex flex-col items-center transition-all duration-500",
+                    isConnecting ? "animate-bounce" : ""
+                  )} 
+                  style={{ top: "15%", right: "18%" }}
+                >
+                  <div className={clsx(
+                    "grid h-10 w-10 place-items-center rounded-full text-[14px] font-bold text-white shadow-md",
+                    isConnected ? "bg-success" : "bg-warning"
+                  )}>
+                    {(peerDisplayName || "Peer").trim().charAt(0).toUpperCase()}
+                  </div>
+                  <div className="mt-1 text-[9px] font-medium text-text truncate max-w-[60px]">{peerDisplayName || "相手"}</div>
+                </div>
               )}
             </div>
-            <div className="mt-3 text-[18px] font-semibold tracking-[-0.03em] text-text">ペアリング</div>
+
+            <div className="mt-3 text-[18px] font-semibold tracking-[-0.03em] text-text">
+              {isConnected ? "接続完了" : isConnecting ? "接続中..." : "ペアリング"}
+            </div>
             <div className="mt-1 text-[12px] leading-[1.6] text-muted">
-              相手にあなたのコードを伝えてください
+              {isConnected 
+                ? "ファイルをドロップして転送できます" 
+                : "相手にあなたのコードを伝えるか、相手のコードを入力してください"}
             </div>
           </div>
 

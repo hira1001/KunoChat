@@ -20,6 +20,13 @@ export type PickedFile = {
 export type NativeFileMetadata = {
   name: string;
   size: number;
+  localPath?: string;
+};
+
+export type NativePathMetadata = {
+  name: string;
+  size: number;
+  isDir: boolean;
 };
 
 export type NativeNotification = {
@@ -92,6 +99,27 @@ export const platformAdapter = {
     return invoke<NativeFileMetadata>("file_metadata", { path });
   },
 
+  async pathMetadata(path: string): Promise<NativePathMetadata> {
+    if (!hasTauri) {
+      throw new Error("Native path metadata is only available in Tauri.");
+    }
+    return invoke<NativePathMetadata>("path_metadata", { path });
+  },
+
+  async zipDirectory(dirPath: string): Promise<NativeFileMetadata> {
+    if (!hasTauri) {
+      throw new Error("Directory zipping is only available in Tauri.");
+    }
+    return invoke<NativeFileMetadata>("zip_directory", { dirPath });
+  },
+
+  async unzipFile(zipPath: string, destDir: string): Promise<string> {
+    if (!hasTauri) {
+      throw new Error("Zip extraction is only available in Tauri.");
+    }
+    return invoke<string>("unzip_file", { zipPath, destDir });
+  },
+
   async readFileChunk(path: string, offset: number, length: number): Promise<ArrayBuffer> {
     if (!hasTauri) {
       throw new Error("Native file reads are only available in Tauri.");
@@ -116,6 +144,56 @@ export const platformAdapter = {
 
     const payload = Array.from(new Uint8Array(bytes));
     return invoke<string>("save_received_file", { filename: name, bytes: payload });
+  },
+
+  async writePartChunk(transferId: string, bytes: ArrayBuffer): Promise<number> {
+    if (!hasTauri) {
+      throw new Error("writePartChunk is only available in Tauri.");
+    }
+    const payload = Array.from(new Uint8Array(bytes));
+    return invoke<number>("write_part_chunk", { transferId, bytes: payload });
+  },
+
+  async getPartFileSize(transferId: string): Promise<number> {
+    if (!hasTauri) {
+      return 0;
+    }
+    return invoke<number>("get_part_file_size", { transferId });
+  },
+
+  async finalizePartFile(transferId: string, filename: string): Promise<string> {
+    if (!hasTauri) {
+      throw new Error("finalizePartFile is only available in Tauri.");
+    }
+    return invoke<string>("finalize_part_file", { transferId, filename });
+  },
+
+  async deletePartFile(transferId: string): Promise<void> {
+    if (!hasTauri) {
+      return;
+    }
+    await invoke<void>("delete_part_file", { transferId });
+  },
+
+  async readEntireFile(path: string, size: number): Promise<ArrayBuffer> {
+    const chunks: ArrayBuffer[] = [];
+    let offset = 0;
+    const chunkSize = 1024 * 1024;
+    while (offset < size) {
+      const chunk = await this.readFileChunk(path, offset, Math.min(chunkSize, size - offset));
+      if (chunk.byteLength === 0) {
+        break;
+      }
+      chunks.push(chunk);
+      offset += chunk.byteLength;
+    }
+    const output = new Uint8Array(offset);
+    let writeOffset = 0;
+    for (const chunk of chunks) {
+      output.set(new Uint8Array(chunk), writeOffset);
+      writeOffset += chunk.byteLength;
+    }
+    return output.buffer;
   },
 
   async pickFolder(): Promise<string | undefined> {

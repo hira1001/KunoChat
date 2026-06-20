@@ -2,6 +2,7 @@ import clsx from "clsx";
 import { Check, CheckCheck, CircleX, Clock3, Pause, Play, RotateCcw, TriangleAlert, X } from "lucide-react";
 import { formatTime } from "../features/chat/format";
 import type { ChatMessage } from "../features/chat/messageTypes";
+import { useChatStore } from "../features/chat/chatStore";
 import { BundleCard } from "./BundleCard";
 import { FileCard } from "./FileCard";
 import { ImageCard } from "./ImageCard";
@@ -17,13 +18,14 @@ type MessageBubbleProps = {
 
 export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, onDownload }: MessageBubbleProps) {
   const mine = message.sender === "me";
+  const transferState = useChatStore((state) => state.transferStates[message.asset?.transferId || ""]);
   const isAsset = message.kind === "file" || message.kind === "image" || message.kind === "bundle";
   const canRetry = mine && (message.status === "failed" || message.status === "cancelled") && Boolean(onRetry);
   const canCancel = mine && (message.status === "sending" || message.status === "queued") && Boolean(onCancel);
   const isPaused = message.status === "queued" && mine;
   const canPause = mine && message.status === "sending" && Boolean(onPause);
   const canResume = mine && isPaused && Boolean(onResume);
-  const canDownload = !mine && message.status === "queued" && Boolean(onDownload);
+  const canDownload = !mine && (message.status === "queued" || message.status === "failed") && Boolean(onDownload);
 
   return (
     <div className={clsx("kuno-message-enter flex w-full min-w-0 gap-2.5", mine ? "justify-end" : "justify-start")}>
@@ -67,6 +69,8 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, o
             status={message.status}
             progress={message.progress}
             error={message.error?.message}
+            speed={transferState?.speed}
+            eta={transferState?.eta}
             onPause={canPause ? () => onPause?.(message.id) : undefined}
             onResume={canResume ? () => onResume?.(message.id) : undefined}
             onDownload={canDownload ? () => onDownload?.(message.id) : undefined}
@@ -112,9 +116,9 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, o
           {canDownload ? (
             <ActionButton
               id={`download-${message.id}`}
-              label="ファイルをダウンロード"
+              label={message.status === "failed" ? "転送を再開" : "ファイルをダウンロード"}
               icon={<Play className="h-3 w-3" />}
-              text="Download"
+              text={message.status === "failed" ? "Resume" : "Download"}
               onClick={() => onDownload?.(message.id)}
               variant="accent"
             />

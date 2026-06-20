@@ -61,7 +61,8 @@ export function App() {
     cancelMessage,
     retryMessage,
     updateSettings,
-    clearHistory
+    clearHistory,
+    requestDownload
   } = useChatStore();
   const pairingCode = useMemo(createPairingCode, []);
   const sessionPeerIdRef = useRef<string>();
@@ -124,7 +125,8 @@ export function App() {
           name: asset.name,
           size: asset.size,
           mime: asset.mime,
-          sha256: asset.sha256
+          sha256: asset.sha256,
+          thumbnail: asset.thumbnail
         });
       },
       onAssetProgress: ({ id, transferId, progress }) =>
@@ -241,6 +243,51 @@ export function App() {
           mode: event.payload.mode,
           signalingUrl: event.payload.signalingUrl
         }).catch(() => undefined);
+      }),
+      listen<{ paths: string[] }>("tauri://drag-drop", async (event) => {
+        if (useChatStore.getState().connectionStatus !== "connected") {
+          setView("pairing");
+          return;
+        }
+        const paths = event.payload.paths;
+        if (!paths || paths.length === 0) {
+          return;
+        }
+        try {
+          const parsed = await Promise.all(
+            paths.map(async (path, index) => {
+              const fallbackName = path.split(/[\\/]/).pop() || `file-${index + 1}`;
+              const metadata = await platformAdapter.getFileMetadata(path).catch(() => ({
+                name: fallbackName,
+                size: 0
+              }));
+              const name = metadata.name || fallbackName;
+              const mime = platformAdapter.inferMime(name);
+              return {
+                id: `drop_native_${Date.now()}_${index}`,
+                kind: mime.startsWith("image/") ? "image" : "file",
+                name,
+                size: metadata.size,
+                mime,
+                localPath: path
+              } as DraftAttachment;
+            })
+          );
+          addAttachments(parsed);
+        } catch (err) {
+          console.error("Native drag-drop processing failed:", err);
+        } finally {
+          setDraggingOver(false);
+        }
+      }),
+      listen("tauri://drag-over", () => {
+        setDraggingOver(useChatStore.getState().connectionStatus === "connected");
+      }),
+      listen("tauri://drag-leave", () => {
+        setDraggingOver(false);
+      }),
+      listen("tauri://drag-drop-cancelled", () => {
+        setDraggingOver(false);
       })
     ];
 
@@ -480,6 +527,7 @@ export function App() {
             onCancelMessage={handleCancelMessage}
             onPauseMessage={handlePauseMessage}
             onResumeMessage={handleResumeMessage}
+            onDownload={requestDownload}
           />
           <DropOverlay visible={isDraggingOver} />
           <AttachmentPreview attachments={attachments} onRemove={removeAttachment} />
@@ -497,6 +545,68 @@ export function App() {
   );
 }
 
+async function readEntireFile(localPath: string, size: number): Promise<Blob> {
+  const chunks: ArrayBuffer[] = [];
+  let offset = 0;
+  const chunkSize = 1024 * 1024; // 1MB chunks
+  while (offset < size) {
+    const chunk = await platformAdapter.readFileChunk(localPath, offset, Math.min(chunkSize, size - offset));
+    if (chunk.byteLength === 0) {
+      break;
+    }
+    chunks.push(chunk);
+    offset += chunk.byteLength;
+  }
+  return new Blob(chunks);
+}
+
+function generateThumbnail(fileOrBlob: Blob): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    if (!fileOrBlob.type.startsWith("image/")) {
+      resolve(undefined);
+      return;
+    }
+    const url = URL.createObjectURL(fileOrBlob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      try {
+        const maxDim = 100;
+        let width = img.width;
+        let height = img.height;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.5);
+          resolve(dataUrl);
+        } else {
+          resolve(undefined);
+        }
+      } catch (err) {
+        console.error("Failed to generate thumbnail canvas:", err);
+        resolve(undefined);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(undefined);
+    };
+    img.src = url;
+  });
+}
+
 async function sendRealtimeMessage(message: ChatMessage) {
   if (message.kind === "text" && message.text) {
     realtimeClient.sendText({
@@ -511,6 +621,21 @@ async function sendRealtimeMessage(message: ChatMessage) {
 
   if ((message.kind === "file" || message.kind === "image") && message.asset) {
     const sha256 = sha256ForAsset(message.asset);
+    let thumbnail: string | undefined = undefined;
+    if (message.asset.kind === "image" || message.asset.mime.startsWith("image/")) {
+      try {
+        let blob: Blob | undefined = message.asset.file;
+        if (!blob && message.asset.localPath) {
+          blob = await readEntireFile(message.asset.localPath, message.asset.size);
+        }
+        if (blob) {
+          thumbnail = await generateThumbnail(blob);
+        }
+      } catch (err) {
+        console.error("Failed to generate sender thumbnail:", err);
+      }
+    }
+
     await realtimeClient.sendAsset(
       {
         id: message.asset.id,
@@ -522,7 +647,8 @@ async function sendRealtimeMessage(message: ChatMessage) {
         kind: message.asset.kind,
         name: message.asset.name,
         size: message.asset.size,
-        mime: message.asset.mime
+        mime: message.asset.mime,
+        thumbnail
       },
       createBinarySource(message.asset),
       { sha256 }
@@ -533,6 +659,21 @@ async function sendRealtimeMessage(message: ChatMessage) {
   if (message.kind === "bundle" && message.bundle) {
     for (const item of message.bundle.items) {
       const sha256 = sha256ForAsset(item);
+      let thumbnail: string | undefined = undefined;
+      if (item.kind === "image" || item.mime.startsWith("image/")) {
+        try {
+          let blob: Blob | undefined = item.file;
+          if (!blob && item.localPath) {
+            blob = await readEntireFile(item.localPath, item.size);
+          }
+          if (blob) {
+            thumbnail = await generateThumbnail(blob);
+          }
+        } catch (err) {
+          console.error("Failed to generate sender bundle item thumbnail:", err);
+        }
+      }
+
       await realtimeClient.sendAsset(
         {
           id: item.id,
@@ -545,7 +686,8 @@ async function sendRealtimeMessage(message: ChatMessage) {
           name: item.name,
           size: item.size,
           mime: item.mime,
-          caption: message.bundle.caption
+          caption: message.bundle.caption,
+          thumbnail
         },
         createBinarySource(item),
         { sha256 }

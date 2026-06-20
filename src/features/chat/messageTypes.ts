@@ -60,6 +60,7 @@ export type AssetContent = {
   width?: number;
   height?: number;
   sha256?: string;
+  thumbnail?: string;
 };
 
 export type BundleContent = {

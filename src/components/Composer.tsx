@@ -17,6 +17,9 @@ export function Composer({ value, hasAttachments, disabled = false, onChange, on
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
+      if (event.nativeEvent.isComposing) {
+        return;
+      }
       event.preventDefault();
       if (canSend) onSend();
     }

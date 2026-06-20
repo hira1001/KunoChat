@@ -62,8 +62,6 @@
   --ease-out: cubic-bezier(0, 0, 0.2, 1);
 }
 
-/* ─── Dark mode tokens ─── */
-body.dark,
 @media (prefers-color-scheme: dark) {
   :root:not(.light) {
     --bg: #0d1117;

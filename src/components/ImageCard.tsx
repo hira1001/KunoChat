@@ -1,4 +1,4 @@
-import { ImageIcon, ZoomIn } from "lucide-react";
+import { ImageIcon, Play, ZoomIn } from "lucide-react";
 import clsx from "clsx";
 import { formatBytes } from "../features/chat/format";
 import type { AssetContent, MessageStatus } from "../features/chat/messageTypes";
@@ -8,38 +8,58 @@ type ImageCardProps = {
   status: MessageStatus;
   progress?: number;
   variant?: "card" | "message";
+  onDownload?: () => void;
 };
 
-export function ImageCard({ asset, status, progress, variant = "card" }: ImageCardProps) {
+export function ImageCard({ asset, status, progress, variant = "card", onDownload }: ImageCardProps) {
   const activeProgress = progress ?? asset.progress;
   const messageVariant = variant === "message";
   const isActive = status === "sending" || status === "receiving";
   const isDone = status === "received" || status === "saved";
 
+  const isDownloadPending = status === "queued" && Boolean(onDownload);
+
   return (
     <div className="group w-full min-w-0 max-w-full overflow-hidden rounded-[13px] border border-border bg-surface shadow-card transition-all duration-200 hover:shadow-window">
       {/* Image preview */}
       <div className="relative aspect-[2.55] overflow-hidden bg-surface-active">
-        {asset.previewUrl ? (
+        {asset.previewUrl || asset.thumbnail ? (
           <>
             <img
-              src={asset.previewUrl}
+              src={asset.previewUrl || asset.thumbnail}
               alt={asset.name}
               className={clsx(
                 "h-full w-full object-cover transition-all duration-500",
-                isActive ? "scale-[1.02] blur-[1px]" : "scale-100 blur-0"
+                isActive || !asset.previewUrl ? "scale-[1.02] blur-[8px]" : "scale-100 blur-0"
               )}
             />
             {/* Zoom hint on hover */}
-            <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/20 group-hover:opacity-100">
-              <ZoomIn className="h-6 w-6 text-white drop-shadow-lg" />
-            </div>
+            {isDone && asset.previewUrl ? (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/20 group-hover:opacity-100">
+                <ZoomIn className="h-6 w-6 text-white drop-shadow-lg" />
+              </div>
+            ) : null}
           </>
         ) : (
           <div className="grid h-full place-items-center text-faint">
             <ImageIcon className="h-8 w-8 animate-pulse" />
           </div>
         )}
+
+        {/* Overlay download button centered on preview */}
+        {isDownloadPending ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/20 backdrop-blur-[1px] transition-all duration-200">
+            <button
+              type="button"
+              aria-label="画像ダウンロードを開始"
+              onClick={onDownload}
+              className="kuno-focus-ring flex items-center gap-1.5 rounded-pill border border-accent bg-accent px-3.5 py-1.5 text-[11px] font-bold text-white shadow-lg transition-all duration-150 hover:bg-accent-hover hover:scale-105 active:scale-95"
+            >
+              <Play className="h-3.5 w-3.5 fill-current" />
+              Download ({formatBytes(asset.size)})
+            </button>
+          </div>
+        ) : null}
 
         {/* Overlay progress during transfer */}
         {isActive && typeof activeProgress === "number" ? (

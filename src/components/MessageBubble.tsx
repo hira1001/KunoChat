@@ -12,9 +12,10 @@ type MessageBubbleProps = {
   onCancel?: (messageId: string) => void;
   onPause?: (messageId: string) => void;
   onResume?: (messageId: string) => void;
+  onDownload?: (messageId: string) => void;
 };
 
-export function MessageBubble({ message, onRetry, onCancel, onPause, onResume }: MessageBubbleProps) {
+export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, onDownload }: MessageBubbleProps) {
   const mine = message.sender === "me";
   const isAsset = message.kind === "file" || message.kind === "image" || message.kind === "bundle";
   const canRetry = mine && (message.status === "failed" || message.status === "cancelled") && Boolean(onRetry);
@@ -22,6 +23,7 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume }:
   const isPaused = message.status === "queued" && mine;
   const canPause = mine && message.status === "sending" && Boolean(onPause);
   const canResume = mine && isPaused && Boolean(onResume);
+  const canDownload = !mine && message.status === "queued" && Boolean(onDownload);
 
   return (
     <div className={clsx("kuno-message-enter flex w-full min-w-0 gap-2.5", mine ? "justify-end" : "justify-start")}>
@@ -54,6 +56,7 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume }:
             status={message.status}
             progress={message.progress}
             variant="message"
+            onDownload={canDownload ? () => onDownload?.(message.id) : undefined}
           />
         ) : null}
 
@@ -66,6 +69,7 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume }:
             error={message.error?.message}
             onPause={canPause ? () => onPause?.(message.id) : undefined}
             onResume={canResume ? () => onResume?.(message.id) : undefined}
+            onDownload={canDownload ? () => onDownload?.(message.id) : undefined}
           />
         ) : null}
 
@@ -102,6 +106,16 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume }:
               icon={<Play className="h-3 w-3" />}
               text="Resume"
               onClick={() => onResume?.(message.id)}
+              variant="accent"
+            />
+          ) : null}
+          {canDownload ? (
+            <ActionButton
+              id={`download-${message.id}`}
+              label="ファイルをダウンロード"
+              icon={<Play className="h-3 w-3" />}
+              text="Download"
+              onClick={() => onDownload?.(message.id)}
               variant="accent"
             />
           ) : null}

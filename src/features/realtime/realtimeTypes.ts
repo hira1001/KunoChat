@@ -29,6 +29,7 @@ export type RealtimeAssetMeta = {
   mime: string;
   sha256?: string;
   caption?: string;
+  thumbnail?: string;
 };
 
 export type RealtimeBinarySource = {
@@ -40,6 +41,7 @@ export type RealtimeControlMessage =
   | ({ v: 1; type: "text" } & RealtimeTextPayload)
   | { v: 1; type: "ack"; id: string; receivedAt: number }
   | { v: 1; type: "asset-start"; asset: RealtimeAssetMeta }
+  | { v: 1; type: "request-transfer"; messageId: string; transferId: string }
   | { v: 1; type: "asset-progress"; id: string; transferId: string; progress: number; receivedBytes: number }
   | { v: 1; type: "asset-complete"; id: string; transferId: string; objectUrl: string; sha256?: string }
   | { v: 1; type: "asset-failed"; id: string; transferId: string; message: string }

@@ -163,7 +163,7 @@ describe("chatStore", () => {
 
   test("starts receiving peer assets", () => {
     useChatStore.getState().receivePeerAsset({ id: "asset_msg", transferId: "tr_1", senderId: "peer", senderName: "Taro", createdAt: 1, kind: "file", name: "a.pdf", size: 42, mime: "application/pdf", sha256: "abc" });
-    expect(useChatStore.getState().transferStates.tr_1).toMatchObject({ status: "receiving", progress: 0, size: 42, sha256: "abc" });
+    expect(useChatStore.getState().transferStates.tr_1).toMatchObject({ status: "queued", progress: 0, size: 42, sha256: "abc" });
     expect(useChatStore.getState().messages[0].asset?.sha256).toBe("abc");
   });
 
@@ -337,8 +337,8 @@ describe("chatStore", () => {
 
     useChatStore.getState().receivePeerAsset(input);
 
-    expect(useChatStore.getState().messages[0]).toMatchObject({ status: "receiving", progress: 0, error: undefined });
-    expect(useChatStore.getState().transferStates.tr_1).toMatchObject({ status: "receiving", progress: 0 });
+    expect(useChatStore.getState().messages[0]).toMatchObject({ status: "queued", progress: 0, error: undefined });
+    expect(useChatStore.getState().transferStates.tr_1).toMatchObject({ status: "queued", progress: 0 });
   });
 
   test("updates settings without dropping existing values", () => {
@@ -351,4 +351,31 @@ describe("chatStore", () => {
     useChatStore.getState().clearHistory();
     expect(useChatStore.getState().messages).toHaveLength(0);
   });
+
+  test("requests manual download and transitions status to receiving", () => {
+    useChatStore.getState().receivePeerAsset({ id: "asset_msg", transferId: "tr_1", senderId: "peer", senderName: "Taro", createdAt: 1, kind: "file", name: "a.pdf", size: 42, mime: "application/pdf" });
+    expect(useChatStore.getState().messages[0].status).toBe("queued");
+
+    useChatStore.getState().requestDownload("asset_msg");
+    expect(useChatStore.getState().messages[0].status).toBe("receiving");
+  });
+
+  test("stores thumbnail metadata when receiving peer asset", () => {
+    const input = {
+      id: "asset_msg_thumb",
+      transferId: "tr_thumb",
+      senderId: "peer",
+      senderName: "Taro",
+      createdAt: 1,
+      kind: "image" as const,
+      name: "image.png",
+      size: 1024,
+      mime: "image/png",
+      thumbnail: "data:image/jpeg;base64,abc"
+    };
+    useChatStore.getState().receivePeerAsset(input);
+    const storedMsg = useChatStore.getState().messages.find(m => m.id === "asset_msg_thumb");
+    expect(storedMsg?.asset?.thumbnail).toBe("data:image/jpeg;base64,abc");
+  });
 });
+

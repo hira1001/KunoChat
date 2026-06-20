@@ -12,6 +12,7 @@ type MessageListProps = {
   onCancelMessage?: (messageId: string) => void;
   onPauseMessage?: (messageId: string) => void;
   onResumeMessage?: (messageId: string) => void;
+  onDownload?: (messageId: string) => void;
 };
 
 export function MessageList({
@@ -22,7 +23,8 @@ export function MessageList({
   onRetryMessage,
   onCancelMessage,
   onPauseMessage,
-  onResumeMessage
+  onResumeMessage,
+  onDownload
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const isConnected = connectionStatus === "connected";
@@ -57,6 +59,7 @@ export function MessageList({
               onCancel={onCancelMessage}
               onPause={onPauseMessage}
               onResume={onResumeMessage}
+              onDownload={onDownload}
             />
           ))}
           {showTyping ? <TypingIndicator peerName={peerName} /> : null}

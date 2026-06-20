@@ -165,6 +165,10 @@ export const platformAdapter = {
     }
 
     return invoke<PlatformInfo>("get_platform_info");
+  },
+
+  inferMime(name: string): string {
+    return inferMime(name);
   }
 };
 

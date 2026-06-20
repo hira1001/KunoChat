@@ -59,6 +59,10 @@ class KunoRealtimeClient {
   private incomingTransfers = new Map<string, IncomingTransfer>();
   private outgoingTransfers = new Map<string, OutgoingTransfer>();
   private pausedTransfers = new Map<string, { resolve: () => void }>();
+  private pendingAssets = new Map<
+    string,
+    { meta: RealtimeAssetMeta; source: File | RealtimeBinarySource; options: SendAssetOptions }
+  >();
 
   configure(callbacks: RealtimeCallbacks) {
     this.callbacks = callbacks;
@@ -157,6 +161,31 @@ class KunoRealtimeClient {
       throw new Error("Binary channel is not open.");
     }
 
+    this.pendingAssets.set(meta.transferId, { meta, source, options });
+    this.sendControl({ v: 1, type: "asset-start", asset: meta });
+  }
+
+  requestTransfer(messageId: string, transferId: string) {
+    try {
+      this.sendControl({ v: 1, type: "request-transfer", messageId, transferId });
+    } catch (err) {
+      console.error("Failed to send request-transfer control message:", err);
+    }
+  }
+
+  private startPendingTransfer(transferId: string) {
+    const pending = this.pendingAssets.get(transferId);
+    if (!pending) {
+      console.warn("[realtimeClient] request-transfer received, but no pending asset found for transferId:", transferId);
+      return;
+    }
+    this.pendingAssets.delete(transferId);
+    void this.executeTransfer(pending.meta, pending.source, pending.options).catch((err) => {
+      console.error("Transfer execution failed:", err);
+    });
+  }
+
+  private async executeTransfer(meta: RealtimeAssetMeta, source: File | RealtimeBinarySource, options: SendAssetOptions) {
     const outgoingTransfer: OutgoingTransfer = {
       id: meta.transferId,
       messageId: meta.messageId,
@@ -166,7 +195,9 @@ class KunoRealtimeClient {
     this.outgoingTransfers.set(meta.transferId, outgoingTransfer);
 
     const sha256Promise = Promise.resolve(options.sha256).catch(() => undefined);
-    this.sendControl({ v: 1, type: "asset-start", asset: meta });
+    
+    // Notify local callback that transfer officially started
+    this.callbacks?.onLocalAssetProgress({ id: meta.messageId, transferId: meta.transferId, progress: 0 });
 
     const chunkSize = TRANSFER_LIMITS.chunkSize;
     let offset = 0;
@@ -193,6 +224,9 @@ class KunoRealtimeClient {
             ? await source.slice(offset, offset + chunkSize).arrayBuffer()
             : await source.readChunk(offset, chunkSize);
         this.throwIfCancelled(outgoingTransfer);
+        if (!this.binary) {
+          throw new Error("Binary channel was closed during transfer.");
+        }
         this.binary.send(encodeBinaryChunk(meta.transferId, bytes));
         offset += bytes.byteLength;
         const progress = size === 0 ? 100 : Math.min(100, Math.round((offset / size) * 100));
@@ -599,6 +633,11 @@ class KunoRealtimeClient {
         senderComplete: false
       });
       this.callbacks?.onAssetStart(message.asset);
+      return;
+    }
+
+    if (message.type === "request-transfer") {
+      this.startPendingTransfer(message.transferId);
       return;
     }
 

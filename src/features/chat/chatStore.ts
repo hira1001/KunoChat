@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { realtimeClient } from "../realtime/realtimeClient";
 import type {
   AppView,
   ChatMessage,
@@ -40,6 +41,7 @@ type ChatStore = {
     size: number;
     mime: string;
     sha256?: string;
+    thumbnail?: string;
   }) => void;
   updateTransferProgress: (input: { messageId: string; transferId: string; progress: number }) => void;
   completeTransfer: (input: { messageId: string; transferId: string; objectUrl?: string; savePath?: string; sha256?: string }) => void;
@@ -53,6 +55,7 @@ type ChatStore = {
   sendDraft: (transport?: (message: ChatMessage) => Promise<void> | void) => Promise<void>;
   updateSettings: (settings: Partial<KunoSettings>) => void;
   clearHistory: () => void;
+  requestDownload: (messageId: string) => void;
 };
 
 const defaultSettings: KunoSettings = {
@@ -215,7 +218,12 @@ export const useChatStore = create<ChatStore>()(
       receivePeerAsset: (input) =>
         set((state) => {
           const existingMessage = state.messages.find((message) => message.id === input.id);
-          if (existingMessage && existingMessage.status !== "failed" && existingMessage.status !== "receiving") {
+          if (
+            existingMessage &&
+            existingMessage.status !== "failed" &&
+            existingMessage.status !== "queued" &&
+            existingMessage.status !== "receiving"
+          ) {
             return state;
           }
 
@@ -225,7 +233,7 @@ export const useChatStore = create<ChatStore>()(
                 message.id === input.id
                   ? {
                       ...message,
-                      status: "receiving",
+                      status: "queued",
                       progress: 0,
                       error: undefined,
                       asset: {
@@ -236,7 +244,8 @@ export const useChatStore = create<ChatStore>()(
                         mime: input.mime,
                         sha256: input.sha256,
                         transferId: input.transferId,
-                        progress: 0
+                        progress: 0,
+                        thumbnail: input.thumbnail
                       }
                     }
                   : message
@@ -245,7 +254,7 @@ export const useChatStore = create<ChatStore>()(
                 ...state.transferStates,
                 [input.transferId]: {
                   transferId: input.transferId,
-                  status: "receiving",
+                  status: "queued",
                   progress: 0,
                   size: input.size,
                   mime: input.mime,
@@ -269,7 +278,7 @@ export const useChatStore = create<ChatStore>()(
                 senderId: input.senderId,
                 senderName: input.senderName,
                 createdAt: input.createdAt,
-                status: "receiving",
+                status: "queued",
                 progress: 0,
                 asset: {
                   id: input.id,
@@ -279,7 +288,8 @@ export const useChatStore = create<ChatStore>()(
                   mime: input.mime,
                   sha256: input.sha256,
                   transferId: input.transferId,
-                  progress: 0
+                  progress: 0,
+                  thumbnail: input.thumbnail
                 }
               }
             ],
@@ -287,7 +297,7 @@ export const useChatStore = create<ChatStore>()(
               ...state.transferStates,
               [input.transferId]: {
                 transferId: input.transferId,
-                status: "receiving",
+                status: "queued",
                 progress: 0,
                 size: input.size,
                 mime: input.mime,
@@ -539,7 +549,20 @@ export const useChatStore = create<ChatStore>()(
         set((state) => ({
           settings: { ...state.settings, ...settings }
         })),
-      clearHistory: () => set({ messages: [] })
+      clearHistory: () => set({ messages: [] }),
+      requestDownload: (messageId) => {
+        const message = get().messages.find((m) => m.id === messageId);
+        if (!message || message.sender === "me" || message.status !== "queued") {
+          return;
+        }
+
+        get().markMessageStatus(messageId, "receiving");
+
+        const transferIds = message.asset ? [message.asset.transferId] : (message.bundle?.items.map((i) => i.transferId) ?? []);
+        for (const transferId of transferIds) {
+          realtimeClient.requestTransfer(messageId, transferId);
+        }
+      }
     }),
     {
       name: "kunochat-local-state",

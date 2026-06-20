@@ -153,10 +153,10 @@ fn join_room(rooms: &Rooms, room_id: &str, peer: Peer) -> Result<Vec<Value>, Str
     let mut rooms = rooms.lock().map_err(|_| "room lock poisoned".to_string())?;
     let room = rooms.entry(room_id.to_string()).or_insert_with(HashMap::new);
 
-    if !room.contains_key(&peer.peer_id) && room.len() >= 5 {
+    if !room.contains_key(&peer.peer_id) && room.len() >= 2 {
         send_json(
             &peer.tx,
-            json!({ "type": "error", "message": "This KunoChat room already has five peers." }),
+            json!({ "type": "error", "message": "This KunoChat room already has two peers." }),
         );
         return Err("room full".to_string());
     }

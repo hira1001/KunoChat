@@ -44,6 +44,8 @@ export type RealtimeControlMessage =
   | { v: 1; type: "asset-complete"; id: string; transferId: string; objectUrl: string; sha256?: string }
   | { v: 1; type: "asset-failed"; id: string; transferId: string; message: string }
   | { v: 1; type: "asset-cancelled"; id: string; transferId: string; message?: string }
+  | { v: 1; type: "asset-pause"; id: string; transferId: string }
+  | { v: 1; type: "asset-resume"; id: string; transferId: string }
   | { v: 1; type: "typing"; senderId: string; senderName: string; isTyping: boolean; at: number }
   | { v: 1; type: "ping"; at: number }
   | { v: 1; type: "pong"; at: number };
@@ -54,7 +56,7 @@ export type RealtimePeer = {
 };
 
 export type RealtimeCallbacks = {
-  onStatus: (status: "connecting" | "connected" | "reconnecting" | "offline" | "failed") => void;
+  onStatus: (status: "connecting" | "connected" | "reconnecting" | "offline" | "failed" | "pairing") => void;
   onPeer: (peer: RealtimePeer) => void;
   onText: (payload: RealtimeTextPayload) => void;
   onAssetStart: (asset: RealtimeAssetMeta) => void;
@@ -62,6 +64,8 @@ export type RealtimeCallbacks = {
   onAssetComplete: (input: { id: string; transferId: string; objectUrl: string; blob?: Blob; meta?: RealtimeAssetMeta }) => void;
   onAssetFailed: (input: { id: string; transferId: string; message: string }) => void;
   onAssetCancelled: (input: { id: string; transferId: string; message?: string }) => void;
+  onAssetPaused: (input: { id: string; transferId: string }) => void;
+  onAssetResumed: (input: { id: string; transferId: string }) => void;
   onLocalAssetProgress: (input: { id: string; transferId: string; progress: number }) => void;
   onAck: (messageId: string) => void;
   onTyping: (input: { peerId: string; senderName: string; isTyping: boolean }) => void;

@@ -18,7 +18,7 @@ export function Composer({ value, hasAttachments, disabled = false, onChange, on
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      onSend();
+      if (canSend) onSend();
     }
 
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "o") {
@@ -27,55 +27,74 @@ export function Composer({ value, hasAttachments, disabled = false, onChange, on
     }
   }
 
+  function handleSend() {
+    if (!canSend) return;
+    // Flash animation on button element
+    const btn = document.getElementById("composer-send-btn");
+    btn?.classList.remove("kuno-send-bounce");
+    void btn?.offsetWidth; // reflow to restart animation
+    btn?.classList.add("kuno-send-bounce");
+    onSend();
+  }
+
   return (
-    <div className="w-full min-w-0 max-w-full shrink-0 overflow-hidden border-t border-border bg-white/96 p-3">
+    <div className="w-full min-w-0 max-w-full shrink-0 overflow-hidden border-t border-border bg-bg-glass px-3 py-3 backdrop-blur-[20px]">
       <div
-        className="grid min-h-[42px] w-full min-w-0 max-w-full items-end gap-1.5 overflow-hidden rounded-[17px] border border-border bg-white p-1.5 shadow-[0_10px_30px_rgba(16,24,40,0.07)]"
+        className={clsx(
+          "grid min-h-[44px] w-full min-w-0 max-w-full items-end gap-1.5 overflow-hidden rounded-[18px] border bg-surface p-1.5 transition-all duration-200",
+          disabled
+            ? "border-border"
+            : "border-border-strong shadow-[0_4px_20px_rgba(14,21,40,0.08)] focus-within:border-accent/40 focus-within:shadow-[0_6px_24px_rgba(37,99,235,0.14)]"
+        )}
         style={{ gridTemplateColumns: disabled ? "minmax(0, 1fr)" : "minmax(0, 1fr) 32px 32px 36px" }}
       >
         <textarea
+          id="composer-textarea"
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={disabled ? "Pair first..." : "Message..."}
+          placeholder={disabled ? "まずペアリングしてください..." : "メッセージを入力..."}
           disabled={disabled}
           rows={1}
-          className="max-h-24 min-h-8 w-full min-w-0 rounded-[12px] border-0 bg-transparent px-2.5 py-1.5 text-[13px] leading-5 text-text outline-none transition placeholder:text-faint disabled:text-muted"
+          className="max-h-24 min-h-8 w-full min-w-0 rounded-[12px] border-0 bg-transparent px-2.5 py-1.5 text-[13px] leading-5 text-text outline-none placeholder:text-faint disabled:text-muted"
         />
         {!disabled ? (
           <>
             <button
               type="button"
-              aria-label="Attach files"
-              title="Attach files"
+              id="composer-pick-btn"
+              aria-label="ファイルを選択"
+              title="ファイルを選択 (⌘O)"
               onClick={onPickFiles}
-              className="kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-pill text-muted transition hover:bg-surface-hover hover:text-text"
+              className="kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted transition-all duration-150 hover:bg-surface-active hover:text-text active:scale-90"
             >
               <Plus className="h-4 w-4" />
             </button>
             <button
               type="button"
-              aria-label="Attach from clipboard"
-              title="Attach from clipboard"
+              id="composer-clip-btn"
+              aria-label="クリップボードから添付"
+              title="クリップボードから添付"
               onClick={onPickFiles}
-              className="kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-pill text-muted transition hover:bg-surface-hover hover:text-text"
+              className="kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted transition-all duration-150 hover:bg-surface-active hover:text-text active:scale-90"
             >
-              <Paperclip className="h-4 w-4" />
+              <Paperclip className="h-3.5 w-3.5" />
             </button>
             <button
               type="button"
-              aria-label="Send"
-              title="Send"
-              onClick={onSend}
+              id="composer-send-btn"
+              aria-label="送信"
+              title="送信 (Enter)"
+              onClick={handleSend}
               disabled={!canSend}
               className={clsx(
-                "kuno-focus-ring grid h-9 w-9 shrink-0 place-items-center rounded-full border transition enabled:hover:-translate-y-0.5 active:translate-y-0",
+                "kuno-focus-ring grid h-9 w-9 shrink-0 place-items-center rounded-full border transition-all duration-200",
                 canSend
-                  ? "border-accent bg-accent text-white shadow-[0_8px_18px_rgba(37,99,235,0.28)]"
+                  ? "border-accent/30 bg-accent text-white shadow-accent hover:-translate-y-0.5 hover:bg-accent-hover hover:shadow-[0_10px_28px_var(--accent-glow)] active:translate-y-0 active:scale-95"
                   : "border-border bg-surface text-faint shadow-none"
               )}
             >
-              <SendHorizontal className="h-4 w-4" />
+              <SendHorizontal className="h-3.5 w-3.5" />
             </button>
           </>
         ) : null}

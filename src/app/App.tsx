@@ -78,6 +78,16 @@ export function App() {
     void platformAdapter.positionTopRight();
   }, []);
 
+  // OS dark mode sync
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = (dark: boolean) => document.body.classList.toggle("dark", dark);
+    apply(mq.matches);
+    const handler = (event: MediaQueryListEvent) => apply(event.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
   useEffect(() => {
     realtimeClient.configure({
       onStatus: (status) => {
@@ -130,6 +140,10 @@ export function App() {
         failTransfer({ messageId: id, transferId, message }),
       onAssetCancelled: ({ id, transferId, message }) =>
         cancelTransfer({ messageId: id, transferId, message }),
+      onAssetPaused: ({ id, transferId }) =>
+        markMessageStatus(id, "queued"),
+      onAssetResumed: ({ id, transferId }) =>
+        markMessageStatus(id, "sending"),
       onLocalAssetProgress: ({ id, transferId, progress }) =>
         updateTransferProgress({ messageId: id, transferId, progress }),
       onAck: (messageId) => markMessageStatus(messageId, "received"),
@@ -393,6 +407,26 @@ export function App() {
     });
   }
 
+  function handlePauseMessage(messageId: string) {
+    const message = useChatStore.getState().messages.find((m) => m.id === messageId);
+    if (!message) return;
+    const transferIds = message.asset ? [message.asset.transferId] : (message.bundle?.items.map((i) => i.transferId) ?? []);
+    for (const transferId of transferIds) {
+      realtimeClient.pauseTransfer(messageId, transferId);
+    }
+    markMessageStatus(messageId, "queued");
+  }
+
+  function handleResumeMessage(messageId: string) {
+    const message = useChatStore.getState().messages.find((m) => m.id === messageId);
+    if (!message) return;
+    const transferIds = message.asset ? [message.asset.transferId] : (message.bundle?.items.map((i) => i.transferId) ?? []);
+    for (const transferId of transferIds) {
+      realtimeClient.resumeTransfer(messageId, transferId);
+    }
+    markMessageStatus(messageId, "sending");
+  }
+
   return (
     <WindowShell
       mode={currentView}
@@ -444,6 +478,8 @@ export function App() {
             showTyping={peerTyping}
             onRetryMessage={(messageId) => void handleRetryMessage(messageId)}
             onCancelMessage={handleCancelMessage}
+            onPauseMessage={handlePauseMessage}
+            onResumeMessage={handleResumeMessage}
           />
           <DropOverlay visible={isDraggingOver} />
           <AttachmentPreview attachments={attachments} onRemove={removeAttachment} />

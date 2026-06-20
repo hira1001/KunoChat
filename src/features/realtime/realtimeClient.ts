@@ -58,6 +58,7 @@ class KunoRealtimeClient {
   private manualDisconnect = false;
   private incomingTransfers = new Map<string, IncomingTransfer>();
   private outgoingTransfers = new Map<string, OutgoingTransfer>();
+  private pausedTransfers = new Map<string, { resolve: () => void }>();
 
   configure(callbacks: RealtimeCallbacks) {
     this.callbacks = callbacks;
@@ -179,6 +180,11 @@ class KunoRealtimeClient {
       }
 
       while (offset < size) {
+        if (typeof window !== "undefined" && (window as any).__TEST_ERRORS) {
+          await new Promise(resolve => setTimeout(resolve, 250));
+        }
+        this.throwIfCancelled(outgoingTransfer);
+        await this.waitIfPaused(outgoingTransfer.id);
         this.throwIfCancelled(outgoingTransfer);
         await this.waitForBinaryBuffer();
         this.throwIfCancelled(outgoingTransfer);
@@ -252,7 +258,42 @@ class KunoRealtimeClient {
     if (outgoingTransfer) {
       outgoingTransfer.cancelled = true;
     }
+    // Also resume any paused waiter so the loop can see cancelled
+    this.pausedTransfers.get(transferId)?.resolve();
+    this.pausedTransfers.delete(transferId);
     this.notifyTransferCancelledOnce(outgoingTransfer, message);
+  }
+
+  pauseTransfer(messageId: string, transferId: string) {
+    const existing = this.pausedTransfers.get(transferId);
+    if (!existing) {
+      this.pausedTransfers.set(transferId, { resolve: () => undefined });
+    }
+    try {
+      this.sendControl({ v: 1, type: "asset-pause", id: messageId, transferId });
+    } catch {
+      // Best effort
+    }
+  }
+
+  resumeTransfer(messageId: string, transferId: string) {
+    const waiter = this.pausedTransfers.get(transferId);
+    if (waiter) {
+      waiter.resolve();
+      this.pausedTransfers.delete(transferId);
+    }
+    try {
+      this.sendControl({ v: 1, type: "asset-resume", id: messageId, transferId });
+    } catch {
+      // Best effort
+    }
+  }
+
+  private async waitIfPaused(transferId: string): Promise<void> {
+    if (!this.pausedTransfers.has(transferId)) return;
+    await new Promise<void>((resolve) => {
+      this.pausedTransfers.set(transferId, { resolve });
+    });
   }
 
   private throwIfCancelled(transfer: OutgoingTransfer) {
@@ -334,6 +375,7 @@ class KunoRealtimeClient {
   }
 
   private async handleSignal(message: ServerSignal) {
+    console.log("[realtimeClient] handleSignal received message:", message.type, "current options:", this.options);
     if (!this.options) {
       return;
     }
@@ -347,7 +389,10 @@ class KunoRealtimeClient {
     if (message.type === "peers") {
       message.peers[0] && this.callbacks?.onPeer(message.peers[0]);
       if (this.options.mode === "host" && message.peers.length > 0) {
+        console.log("[realtimeClient] host sees peers already present, starting offer");
         await this.startOffer();
+      } else if (this.options.mode === "host") {
+        this.callbacks?.onStatus("pairing");
       }
       return;
     }
@@ -355,6 +400,7 @@ class KunoRealtimeClient {
     if (message.type === "peer-joined") {
       this.callbacks?.onPeer(message.peer);
       if (this.options.mode === "host") {
+        console.log("[realtimeClient] host sees peer-joined, starting offer");
         await this.startOffer();
       }
       return;
@@ -366,41 +412,72 @@ class KunoRealtimeClient {
     }
 
     if (message.type === "offer") {
-      const peer = this.ensurePeer(false);
-      await peer.setRemoteDescription(message.payload);
-      const answer = await peer.createAnswer();
-      await peer.setLocalDescription(answer);
-      this.sendSignal({ type: "answer", payload: answer });
+      console.log("[realtimeClient] received offer, setting remote description...");
+      try {
+        const peer = this.ensurePeer(false);
+        await peer.setRemoteDescription(message.payload);
+        console.log("[realtimeClient] remote description set, creating answer...");
+        const answer = await peer.createAnswer();
+        console.log("[realtimeClient] answer created, setting local description...");
+        await peer.setLocalDescription(answer);
+        console.log("[realtimeClient] local description set, sending answer...");
+        this.sendSignal({ type: "answer", payload: answer });
+      } catch (err) {
+        console.error("[realtimeClient] error processing offer:", err);
+      }
       return;
     }
 
     if (message.type === "answer") {
-      await this.peer?.setRemoteDescription(message.payload);
+      console.log("[realtimeClient] received answer, setting remote description...");
+      try {
+        await this.peer?.setRemoteDescription(message.payload);
+        console.log("[realtimeClient] remote description set from answer successfully");
+      } catch (err) {
+        console.error("[realtimeClient] error setting remote description from answer:", err);
+      }
       return;
     }
 
     if (message.type === "ice") {
-      await this.peer?.addIceCandidate(message.payload);
+      console.log("[realtimeClient] received ice candidate, adding candidate...");
+      try {
+        await this.peer?.addIceCandidate(message.payload);
+        console.log("[realtimeClient] ice candidate added successfully");
+      } catch (err) {
+        console.error("[realtimeClient] error adding ice candidate:", err);
+      }
     }
   }
 
   private async startOffer() {
+    console.log("[realtimeClient] startOffer() called. hasStartedOffer:", this.hasStartedOffer);
     if (this.hasStartedOffer) {
       return;
     }
     this.hasStartedOffer = true;
 
-    const peer = this.ensurePeer(true);
-    const offer = await peer.createOffer();
-    await peer.setLocalDescription(offer);
-    this.sendSignal({ type: "offer", payload: offer });
+    try {
+      console.log("[realtimeClient] ensuring peer...");
+      const peer = this.ensurePeer(true);
+      console.log("[realtimeClient] creating offer...");
+      const offer = await peer.createOffer();
+      console.log("[realtimeClient] setting local description from offer...");
+      await peer.setLocalDescription(offer);
+      console.log("[realtimeClient] sending offer signal...");
+      this.sendSignal({ type: "offer", payload: offer });
+    } catch (err) {
+      console.error("[realtimeClient] error in startOffer:", err);
+    }
   }
 
   private ensurePeer(isInitiator: boolean) {
+    console.log("[realtimeClient] ensurePeer() called. isInitiator:", isInitiator, "existing peer:", !!this.peer);
     if (this.peer) {
       return this.peer;
     }
 
+    console.log("[realtimeClient] creating RTCPeerConnection with ICE servers:", runtimeConfig.iceServers);
     const peer = new RTCPeerConnection({
       iceServers: runtimeConfig.iceServers,
       bundlePolicy: "max-bundle",
@@ -410,11 +487,15 @@ class KunoRealtimeClient {
 
     peer.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log("[realtimeClient] onicecandidate gathered candidate:", event.candidate.candidate);
         this.sendSignal({ type: "ice", payload: event.candidate.toJSON() });
+      } else {
+        console.log("[realtimeClient] onicecandidate gathering completed (null candidate)");
       }
     };
 
     peer.onconnectionstatechange = () => {
+      console.log("[realtimeClient] peer.connectionState changed:", peer.connectionState);
       if (peer.connectionState === "connected") {
         this.reconnectAttempts = 0;
         this.callbacks?.onStatus("connected");
@@ -430,10 +511,13 @@ class KunoRealtimeClient {
     };
 
     if (isInitiator) {
+      console.log("[realtimeClient] initiator: creating control & binary data channels");
       this.attachControlChannel(peer.createDataChannel("control", { ordered: false }));
       this.attachBinaryChannel(peer.createDataChannel("binary", { ordered: true }));
     } else {
+      console.log("[realtimeClient] receiver: binding ondatachannel callback");
       peer.ondatachannel = (event) => {
+        console.log("[realtimeClient] received data channel from initiator:", event.channel.label);
         if (event.channel.label === "control") {
           this.attachControlChannel(event.channel);
         } else if (event.channel.label === "binary") {
@@ -565,6 +649,25 @@ class KunoRealtimeClient {
       return;
     }
 
+    if (message.type === "asset-pause") {
+      const existing = this.pausedTransfers.get(message.transferId);
+      if (!existing) {
+        this.pausedTransfers.set(message.transferId, { resolve: () => undefined });
+      }
+      this.callbacks?.onAssetPaused({ id: message.id, transferId: message.transferId });
+      return;
+    }
+
+    if (message.type === "asset-resume") {
+      const waiter = this.pausedTransfers.get(message.transferId);
+      if (waiter) {
+        waiter.resolve();
+        this.pausedTransfers.delete(message.transferId);
+      }
+      this.callbacks?.onAssetResumed({ id: message.id, transferId: message.transferId });
+      return;
+    }
+
     if (message.type === "ping") {
       this.sendControl({ v: 1, type: "pong", at: Date.now() });
     }
@@ -666,8 +769,11 @@ class KunoRealtimeClient {
   }
 
   private sendSignal(message: { type: "offer" | "answer" | "ice"; payload: unknown }) {
+    console.log("[realtimeClient] sendSignal called with type:", message.type, "socket state:", this.socket?.readyState);
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(message));
+    } else {
+      console.warn("[realtimeClient] sendSignal failed because socket state is not OPEN. State:", this.socket?.readyState);
     }
   }
 

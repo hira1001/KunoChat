@@ -10,13 +10,23 @@ export function DropOverlay({ visible }: DropOverlayProps) {
   }
 
   return (
-    <div className="absolute inset-4 z-20 grid place-items-center rounded-[16px] border border-dashed border-blue-300 bg-white/92 shadow-[0_24px_70px_rgba(16,24,40,0.14)] backdrop-blur-sm">
+    <div
+      role="region"
+      aria-label="ドロップゾーン"
+      className="absolute inset-3 z-20 grid place-items-center overflow-hidden rounded-[16px] border-2 border-dashed border-accent bg-bg-glass shadow-window backdrop-blur-[20px] kuno-fade-in kuno-drop-border"
+    >
+      {/* Animated glow ring */}
+      <div className="pointer-events-none absolute inset-0 rounded-[16px] bg-accent/5" />
+
       <div className="text-center">
-        <div className="mx-auto grid h-14 w-14 place-items-center rounded-full border border-border bg-white shadow-card">
-          <CloudUpload className="h-7 w-7 text-muted" />
+        {/* Icon container with pulse */}
+        <div className="mx-auto grid h-16 w-16 animate-pulse place-items-center rounded-2xl bg-accent/10 shadow-accent">
+          <CloudUpload className="h-8 w-8 text-accent" />
         </div>
-        <div className="mt-4 text-[13px] font-semibold text-text">ここにファイルをドロップ</div>
-        <div className="mt-1 text-[11px] text-muted">またはクリックして選択</div>
+        <div className="mt-4 text-[14px] font-semibold tracking-[-0.02em] text-text">
+          ここにファイルをドロップ
+        </div>
+        <div className="mt-1 text-[12px] text-muted">複数ファイルも一度に送れます</div>
       </div>
     </div>
   );

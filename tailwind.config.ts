@@ -2,10 +2,12 @@ import type { Config } from "tailwindcss";
 
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  darkMode: ["class"],
   theme: {
     extend: {
       colors: {
         bg: "var(--bg)",
+        "bg-glass": "var(--bg-glass)",
         surface: "var(--surface)",
         "surface-hover": "var(--surface-hover)",
         "surface-active": "var(--surface-active)",
@@ -18,7 +20,9 @@ export default {
         danger: "var(--danger)",
         warning: "var(--warning)",
         accent: "var(--accent)",
-        "accent-soft": "var(--accent-soft)"
+        "accent-hover": "var(--accent-hover)",
+        "accent-soft": "var(--accent-soft)",
+        "accent-glow": "var(--accent-glow)"
       },
       borderRadius: {
         window: "var(--radius-window)",
@@ -29,10 +33,12 @@ export default {
       boxShadow: {
         window: "var(--shadow-window)",
         card: "var(--shadow-card)",
-        pill: "var(--shadow-pill)"
+        pill: "var(--shadow-pill)",
+        accent: "var(--shadow-accent)"
       },
       fontFamily: {
         sans: [
+          "Outfit",
           "ui-sans-serif",
           "system-ui",
           "-apple-system",
@@ -41,6 +47,10 @@ export default {
           "sans-serif"
         ],
         mono: ["ui-monospace", "SFMono-Regular", "Cascadia Mono", "Menlo", "monospace"]
+      },
+      transitionTimingFunction: {
+        spring: "cubic-bezier(0.34, 1.56, 0.64, 1)",
+        smooth: "cubic-bezier(0.4, 0, 0.2, 1)"
       }
     }
   },

@@ -13,3 +13,8 @@ artifacts/
 kunochat-ui-screenshot.png
 
 src-tauri/gen/
+
+# Tauri update keys
+kuno_updater.key
+kuno_updater.key.pub
+

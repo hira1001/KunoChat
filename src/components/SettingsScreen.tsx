@@ -1,7 +1,19 @@
-import { FolderOpen, Moon, Sun, Trash2, X } from "lucide-react";
+import { FolderOpen, Moon, Sun, Trash2, X, RefreshCw, Download, CheckCircle, AlertTriangle } from "lucide-react";
 import type { KunoSettings } from "../features/chat/messageTypes";
 import clsx from "clsx";
 import { useEffect, useState } from "react";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { getVersion } from "@tauri-apps/api/app";
+
+type UpdateState =
+  | { type: "idle" }
+  | { type: "checking" }
+  | { type: "available"; version: string; body?: string; date?: string; updateObj: any }
+  | { type: "downloading"; progress: number }
+  | { type: "installing" }
+  | { type: "upToDate" }
+  | { type: "error"; message: string };
 
 type SettingsScreenProps = {
   settings: KunoSettings;
@@ -13,6 +25,65 @@ type SettingsScreenProps = {
 
 export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, onClearHistory }: SettingsScreenProps) {
   const [isDark, setIsDark] = useState(() => document.body.classList.contains("dark"));
+  const [currentVersion, setCurrentVersion] = useState<string>("0.2.0");
+  const [updateState, setUpdateState] = useState<UpdateState>({ type: "idle" });
+
+  useEffect(() => {
+    getVersion().then(setCurrentVersion).catch((err) => console.error(err));
+  }, []);
+
+  async function handleCheckForUpdates() {
+    setUpdateState({ type: "checking" });
+    try {
+      const update = await check();
+      if (update) {
+        setUpdateState({
+          type: "available",
+          version: update.version,
+          body: update.body,
+          date: update.date,
+          updateObj: update
+        });
+      } else {
+        setUpdateState({ type: "upToDate" });
+        setTimeout(() => setUpdateState({ type: "idle" }), 4000);
+      }
+    } catch (error: any) {
+      console.error(error);
+      setUpdateState({ type: "error", message: error.message || String(error) });
+    }
+  }
+
+  async function handleDownloadAndInstall(updateObj: any) {
+    setUpdateState({ type: "downloading", progress: 0 });
+    try {
+      let downloaded = 0;
+      let contentLength = 0;
+      await updateObj.downloadAndInstall((event: any) => {
+        switch (event.event) {
+          case 'Started':
+            contentLength = event.data.contentLength || 0;
+            break;
+          case 'Progress':
+            downloaded += event.data.chunkLength;
+            if (contentLength > 0) {
+              const progress = Math.round((downloaded / contentLength) * 100);
+              setUpdateState({ type: "downloading", progress });
+            } else {
+              setUpdateState({ type: "downloading", progress: -1 });
+            }
+            break;
+          case 'Finished':
+            setUpdateState({ type: "installing" });
+            break;
+        }
+      });
+      await relaunch();
+    } catch (error: any) {
+      console.error(error);
+      setUpdateState({ type: "error", message: error.message || String(error) });
+    }
+  }
 
   function toggleDarkMode() {
     const next = !isDark;
@@ -128,6 +199,112 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
           >
             変更
           </button>
+        </div>
+
+        {/* App Update Section */}
+        <SectionTitle className="mt-5">アプリのアップデート</SectionTitle>
+        <div className="mt-2 overflow-hidden rounded-[13px] border border-border bg-surface p-4 shadow-card transition-all duration-300">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-[13px] font-semibold text-text">KunoChat</div>
+              <div className="mt-0.5 text-[11px] text-faint">現在のバージョン: v{currentVersion}</div>
+            </div>
+            {updateState.type === "idle" && (
+              <button
+                type="button"
+                id="check-updates-btn"
+                onClick={handleCheckForUpdates}
+                className="kuno-focus-ring flex h-8 items-center gap-1.5 rounded-[9px] bg-accent px-3 text-[12px] font-semibold text-white shadow-sm transition-all duration-150 hover:bg-accent-hover active:scale-95"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                アップデートを確認
+              </button>
+            )}
+          </div>
+
+          {updateState.type === "checking" && (
+            <div className="mt-3 flex items-center gap-2 text-[12px] text-muted">
+              <RefreshCw className="h-3.5 w-3.5 animate-spin text-accent" />
+              <span>アップデートを確認中...</span>
+            </div>
+          )}
+
+          {updateState.type === "upToDate" && (
+            <div className="mt-3 flex items-center gap-2 text-[12px] text-success">
+              <CheckCircle className="h-3.5 w-3.5 shrink-0" />
+              <span>アプリは最新のバージョンです。</span>
+            </div>
+          )}
+
+          {updateState.type === "error" && (
+            <div className="mt-3">
+              <div className="flex items-center gap-2 text-[12px] text-danger">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                <span className="font-semibold">エラーが発生しました</span>
+              </div>
+              <div className="mt-1 text-[11px] text-faint line-clamp-2">{updateState.message}</div>
+              <button
+                type="button"
+                onClick={handleCheckForUpdates}
+                className="mt-2 text-[11px] font-semibold text-accent hover:underline"
+              >
+                再試行
+              </button>
+            </div>
+          )}
+
+          {updateState.type === "available" && (
+            <div className="mt-3 rounded-[10px] bg-accent-soft border border-accent/20 p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-[13px] font-semibold text-accent">新バージョン v{updateState.version} が利用可能です</div>
+                  {updateState.date && (
+                    <div className="mt-0.5 text-[10px] text-faint">リリース日: {updateState.date}</div>
+                  )}
+                  {updateState.body && (
+                    <div className="mt-2 max-h-[80px] overflow-y-auto rounded bg-surface/50 p-2 font-sans text-[11px] leading-relaxed text-muted kuno-scrollbar">
+                      {updateState.body}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <button
+                type="button"
+                id="install-update-btn"
+                onClick={() => handleDownloadAndInstall(updateState.updateObj)}
+                className="mt-3 flex w-full h-9 items-center justify-center gap-1.5 rounded-[8px] bg-accent text-[12px] font-semibold text-white shadow-sm transition-all duration-150 hover:bg-accent-hover active:scale-95"
+              >
+                <Download className="h-4 w-4" />
+                ダウンロードしてインストール
+              </button>
+            </div>
+          )}
+
+          {(updateState.type === "downloading" || updateState.type === "installing") && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between text-[11px] text-muted">
+                <span>
+                  {updateState.type === "downloading" ? "ファイルをダウンロード中..." : "インストール中..."}
+                </span>
+                {updateState.type === "downloading" && updateState.progress >= 0 && (
+                  <span className="font-semibold text-text">{updateState.progress}%</span>
+                )}
+              </div>
+              <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-surface-active">
+                <div
+                  className={clsx(
+                    "h-full bg-accent rounded-full transition-all duration-300",
+                    updateState.type === "installing" || (updateState.type === "downloading" && updateState.progress === -1)
+                      ? "w-2/3 animate-pulse"
+                      : ""
+                  )}
+                  style={{
+                    width: updateState.type === "downloading" && updateState.progress >= 0 ? `${updateState.progress}%` : undefined
+                  }}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Danger zone */}

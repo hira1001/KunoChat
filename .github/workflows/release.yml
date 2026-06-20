@@ -30,12 +30,15 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
-        with:
-          # macOS では Intel (x86_64) と Apple Silicon (aarch64) の両方をターゲットにする
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Add Rust targets (macOS only)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          rustup target add aarch64-apple-darwin
+          rustup target add x86_64-apple-darwin
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm install
 
       - name: Build and Package Tauri App
         uses: tauri-apps/tauri-action@v2

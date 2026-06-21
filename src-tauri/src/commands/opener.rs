@@ -18,8 +18,10 @@ pub async fn reveal_path(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         Command::new("explorer")
             .arg(format!("/select,{path}"))
+            .creation_flags(0x08000000)
             .status()
             .map_err(|error| error.to_string())?;
         return Ok(());

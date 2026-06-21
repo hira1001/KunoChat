@@ -109,7 +109,14 @@ fn read_tailscale_status() -> Result<TailscaleStatus, String> {
     let mut last_error = String::new();
 
     for command in tailscale_command_candidates() {
-        let output = match Command::new(command).args(["status", "--json"]).output() {
+        let mut cmd = Command::new(command);
+        cmd.args(["status", "--json"]);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let output = match cmd.output() {
             Ok(output) => output,
             Err(error) => {
                 last_error = error.to_string();

@@ -83,7 +83,11 @@ export function App() {
   // OS dark mode sync
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const apply = (dark: boolean) => document.body.classList.toggle("dark", dark);
+    const apply = (dark: boolean) => {
+      document.body.classList.toggle("dark", dark);
+      document.documentElement.classList.toggle("dark", dark);
+      document.documentElement.classList.toggle("light", !dark);
+    };
     apply(mq.matches);
     const handler = (event: MediaQueryListEvent) => apply(event.matches);
     mq.addEventListener("change", handler);

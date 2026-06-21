@@ -89,6 +89,8 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
     const next = !isDark;
     setIsDark(next);
     document.body.classList.toggle("dark", next);
+    document.documentElement.classList.toggle("dark", next);
+    document.documentElement.classList.toggle("light", !next);
   }
 
   return (

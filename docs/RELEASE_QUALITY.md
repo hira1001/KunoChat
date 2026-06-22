@@ -15,7 +15,7 @@ Every desktop build should pass:
 The current local evidence is:
 
 - Vitest: 161 passed.
-- Cargo: 38 passed.
+- Cargo: 43 passed.
 - TypeScript: passed.
 - Vite production build: passed.
 - Tauri macOS app/DMG bundle: passed; updater artifacts additionally require the publisher-owned `TAURI_SIGNING_PRIVATE_KEY`.
@@ -52,6 +52,8 @@ Until those credentials exist, GitHub Releases are suitable for controlled beta 
 - Confirm Tailscale discovery works without IP entry when both machines are logged into the same tailnet.
 - Send text both ways.
 - Send image, PDF, and multi-file bundle.
+- Confirm a LAN/Tailscale transfer uses TCP port `8790` for file bytes and that instant text remains responsive during a 1 GB transfer.
+- Block TCP port `8790` on the receiving machine and confirm the same file falls back to the WebRTC binary path without a false failure state.
 - Confirm received files save under the folder currently selected in Settings.
 - Confirm corrupted transfer simulation fails integrity verification.
 - Confirm app restart does not show fake connected state.

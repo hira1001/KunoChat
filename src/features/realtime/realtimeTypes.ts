@@ -6,6 +6,7 @@ export type RealtimeConnectOptions = {
   displayName: string;
   mode: RealtimeConnectionMode;
   signalingUrl?: string;
+  nativeEndpoint?: string;
 };
 
 export type RealtimeTextPayload = {
@@ -31,12 +32,14 @@ export type RealtimeAssetMeta = {
   caption?: string;
   thumbnail?: string;
   isFolder?: boolean;
+  nativeKey?: string;
 };
 
 export type RealtimeBinarySource = {
   size: number;
   readChunk: (offset: number, length: number) => Promise<ArrayBuffer>;
   close?: () => Promise<void>;
+  nativePath?: string;
 };
 
 export type RealtimeControlMessage =
@@ -44,6 +47,7 @@ export type RealtimeControlMessage =
   | { v: 1; type: "ack"; id: string; receivedAt: number }
   | { v: 1; type: "asset-start"; asset: RealtimeAssetMeta }
   | { v: 1; type: "request-transfer"; messageId: string; transferId: string; byteOffset?: number }
+  | { v: 1; type: "request-native-transfer"; messageId: string; transferId: string }
   | { v: 1; type: "asset-progress"; id: string; transferId: string; progress: number; receivedBytes: number }
   | { v: 1; type: "asset-complete"; id: string; transferId: string; objectUrl: string; sha256?: string }
   | { v: 1; type: "asset-failed"; id: string; transferId: string; message: string }

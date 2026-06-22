@@ -39,6 +39,23 @@ export type NativeBinaryFileSource = {
   size: number;
   readChunk: (offset: number, length: number) => Promise<ArrayBuffer>;
   close: () => Promise<void>;
+  nativePath: string;
+};
+
+export type NativeReceiveInput = {
+  transferId: string;
+  messageId: string;
+  expectedSize: number;
+  key: string;
+};
+
+export type NativeSendInput = {
+  transferId: string;
+  messageId: string;
+  path: string;
+  remoteEndpoint: string;
+  expectedSize: number;
+  key: string;
 };
 
 type PartFilePreparation = {
@@ -209,6 +226,7 @@ export const platformAdapter = {
 
     return {
       size,
+      nativePath: scopedPath,
       async readChunk(offset: number, length: number): Promise<ArrayBuffer> {
         if (closed) {
           throw new Error("Native source file is already closed.");
@@ -282,6 +300,59 @@ export const platformAdapter = {
     }
     const writer = await getPartWriter(transferId, expectedSize);
     return writer.size;
+  },
+
+  async inspectPartFileSize(transferId: string): Promise<number> {
+    if (!hasTauri) {
+      return 0;
+    }
+    return invoke<number>("get_part_file_size", { transferId, saveFolder: selectedSaveFolder });
+  },
+
+  async prepareNativeReceive(input: NativeReceiveInput): Promise<number> {
+    if (!hasTauri) {
+      throw new Error("Native transfer is only available in Tauri.");
+    }
+    const preparation = await invoke<{ size: number }>("prepare_native_receive", {
+      ...input,
+      saveFolder: selectedSaveFolder
+    });
+    return preparation.size;
+  },
+
+  async cancelNativeReceive(transferId: string): Promise<void> {
+    if (!hasTauri) {
+      return;
+    }
+    await invoke<void>("cancel_native_receive", { transferId });
+  },
+
+  async cancelNativeSend(transferId: string): Promise<void> {
+    if (!hasTauri) {
+      return;
+    }
+    await invoke<void>("cancel_native_send", { transferId });
+  },
+
+  async pauseNativeSend(transferId: string): Promise<void> {
+    if (!hasTauri) {
+      return;
+    }
+    await invoke<void>("pause_native_send", { transferId });
+  },
+
+  async resumeNativeSend(transferId: string): Promise<void> {
+    if (!hasTauri) {
+      return;
+    }
+    await invoke<void>("resume_native_send", { transferId });
+  },
+
+  async sendNativeFile(input: NativeSendInput): Promise<void> {
+    if (!hasTauri) {
+      throw new Error("Native transfer is only available in Tauri.");
+    }
+    await invoke<void>("send_native_file", input);
   },
 
   async finalizePartFile(transferId: string, filename: string, expectedSize: number, sha256?: string): Promise<string> {

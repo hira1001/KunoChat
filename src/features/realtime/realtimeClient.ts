@@ -49,8 +49,15 @@ function isValidAssetMeta(asset: RealtimeAssetMeta): boolean {
     asset.size <= MAX_ASSET_SIZE_BYTES &&
     typeof asset.name === "string" &&
     asset.name.length > 0 &&
-    asset.name.length <= 255
+    asset.name.length <= 255 &&
+    (asset.nativeKey === undefined || /^[a-f0-9]{64}$/i.test(asset.nativeKey))
   );
+}
+
+function createNativeTransferKey(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function closeRealtimeBinarySource(source: File | RealtimeBinarySource) {
@@ -201,8 +208,11 @@ class KunoRealtimeClient {
       throw new Error("Invalid asset metadata.");
     }
 
-    this.pendingAssets.set(meta.transferId, { meta, source, options });
-    this.sendControl({ v: 1, type: "asset-start", asset: meta });
+    const asset = this.canUseNativeTransfer(source)
+      ? { ...meta, nativeKey: createNativeTransferKey() }
+      : meta;
+    this.pendingAssets.set(asset.transferId, { meta: asset, source, options });
+    this.sendControl({ v: 1, type: "asset-start", asset });
   }
 
   requestTransfer(messageId: string, transferId: string, byteOffset?: number) {
@@ -210,10 +220,51 @@ class KunoRealtimeClient {
       this.callbacks?.onError("Invalid transfer request.");
       return;
     }
+    const incoming = this.incomingTransfers.get(transferId);
+    if (incoming?.meta.nativeKey && (byteOffset ?? 0) === 0) {
+      void this.requestNativeTransfer(messageId, incoming);
+      return;
+    }
     try {
       this.sendControl({ v: 1, type: "request-transfer", messageId, transferId, byteOffset });
     } catch (err) {
       console.error("Failed to send request-transfer control message:", err);
+    }
+  }
+
+  private async requestNativeTransfer(messageId: string, transfer: IncomingTransfer) {
+    try {
+      const existingSize = await platformAdapter.prepareNativeReceive({
+        transferId: transfer.meta.transferId,
+        messageId,
+        expectedSize: transfer.meta.size,
+        key: transfer.meta.nativeKey!
+      });
+      if (existingSize > 0) {
+        this.sendControl({
+          v: 1,
+          type: "request-transfer",
+          messageId,
+          transferId: transfer.meta.transferId,
+          byteOffset: existingSize
+        });
+        return;
+      }
+      this.sendControl({
+        v: 1,
+        type: "request-native-transfer",
+        messageId,
+        transferId: transfer.meta.transferId
+      });
+    } catch (error) {
+      console.warn("Native transfer preparation failed; using WebRTC binary fallback.", error);
+      this.sendControl({
+        v: 1,
+        type: "request-transfer",
+        messageId,
+        transferId: transfer.meta.transferId,
+        byteOffset: 0
+      });
     }
   }
 
@@ -233,6 +284,24 @@ class KunoRealtimeClient {
     void this.executeTransfer(pending.meta, pending.source, pending.options, byteOffset).catch((err) => {
       console.error("Transfer execution failed:", err);
     });
+  }
+
+  private startNativePendingTransfer(transferId: string) {
+    const pending = this.pendingAssets.get(transferId);
+    if (!pending) {
+      return;
+    }
+    if (!this.canUseNativeTransfer(pending.source) || !pending.meta.nativeKey || this.outgoingTransfers.has(transferId)) {
+      this.startPendingTransfer(transferId, 0);
+      return;
+    }
+    void this.executeNativeTransfer(pending.meta, pending.source, pending.options).catch((error) => {
+      console.error("Native transfer execution failed:", error);
+    });
+  }
+
+  private canUseNativeTransfer(source: File | RealtimeBinarySource): source is RealtimeBinarySource & { nativePath: string } {
+    return !(source instanceof File) && Boolean(source.nativePath && this.options?.nativeEndpoint);
   }
 
   private async executeTransfer(
@@ -336,6 +405,76 @@ class KunoRealtimeClient {
     }
   }
 
+  private async executeNativeTransfer(
+    meta: RealtimeAssetMeta,
+    source: RealtimeBinarySource & { nativePath: string },
+    options: SendAssetOptions
+  ) {
+    const remoteEndpoint = this.options?.nativeEndpoint;
+    if (!meta.nativeKey || !remoteEndpoint) {
+      return this.executeTransfer(meta, source, options, 0);
+    }
+
+    const outgoingTransfer: OutgoingTransfer = {
+      id: meta.transferId,
+      messageId: meta.messageId,
+      cancelled: false,
+      cancelNotified: false
+    };
+    this.outgoingTransfers.set(meta.transferId, outgoingTransfer);
+    const sha256Promise = Promise.resolve(options.sha256).catch(() => undefined);
+    let completed = false;
+
+    this.callbacks?.onLocalAssetProgress({
+      id: meta.messageId,
+      transferId: meta.transferId,
+      progress: 0,
+      receivedBytes: 0
+    });
+
+    try {
+      this.throwIfCancelled(outgoingTransfer);
+      await platformAdapter.sendNativeFile({
+        transferId: meta.transferId,
+        messageId: meta.messageId,
+        path: source.nativePath,
+        remoteEndpoint,
+        expectedSize: meta.size,
+        key: meta.nativeKey
+      });
+      this.throwIfCancelled(outgoingTransfer);
+      const sha256 = await sha256Promise;
+      this.sendControl({
+        v: 1,
+        type: "asset-complete",
+        id: meta.messageId,
+        transferId: meta.transferId,
+        objectUrl: "",
+        sha256
+      });
+      completed = true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Native asset transfer failed.";
+      if (message.startsWith("native transfer connection")) {
+        this.outgoingTransfers.delete(meta.transferId);
+        await this.executeTransfer(meta, source, options, 0);
+        completed = true;
+        return;
+      }
+      if (error instanceof TransferCancelledError || outgoingTransfer.cancelled || message === "native transfer cancelled") {
+        this.notifyTransferCancelledOnce(outgoingTransfer);
+      } else {
+        this.notifyTransferFailed(meta, message);
+      }
+      throw error;
+    } finally {
+      this.outgoingTransfers.delete(meta.transferId);
+      if (!completed) {
+        this.releasePendingAsset(meta.transferId);
+      }
+    }
+  }
+
   private releasePendingAsset(transferId: string) {
     const pending = this.pendingAssets.get(transferId);
     if (!pending) {
@@ -383,6 +522,7 @@ class KunoRealtimeClient {
     // Also resume any paused waiter so the loop can see cancelled
     this.pausedTransfers.get(transferId)?.resolve();
     this.pausedTransfers.delete(transferId);
+    void platformAdapter.cancelNativeSend(transferId).catch(() => undefined);
     this.notifyTransferCancelledOnce(outgoingTransfer, message);
     if (!this.outgoingTransfers.has(transferId)) {
       this.releasePendingAsset(transferId);
@@ -394,6 +534,7 @@ class KunoRealtimeClient {
     if (!existing) {
       this.pausedTransfers.set(transferId, { resolve: () => undefined });
     }
+    void platformAdapter.pauseNativeSend(transferId).catch(() => undefined);
     try {
       this.sendControl({ v: 1, type: "asset-pause", id: messageId, transferId });
     } catch {
@@ -407,6 +548,7 @@ class KunoRealtimeClient {
       waiter.resolve();
       this.pausedTransfers.delete(transferId);
     }
+    void platformAdapter.resumeNativeSend(transferId).catch(() => undefined);
     try {
       this.sendControl({ v: 1, type: "asset-resume", id: messageId, transferId });
     } catch {
@@ -740,6 +882,15 @@ class KunoRealtimeClient {
       return;
     }
 
+    if (message.type === "request-native-transfer") {
+      if (!isValidTransferId(message.transferId)) {
+        this.callbacks?.onError("Rejected invalid native transfer request.");
+        return;
+      }
+      this.startNativePendingTransfer(message.transferId);
+      return;
+    }
+
     if (message.type === "asset-progress") {
       if (!isValidTransferId(message.transferId) || !Number.isFinite(message.progress) || !Number.isSafeInteger(message.receivedBytes)) {
         this.callbacks?.onError("Rejected invalid transfer progress.");
@@ -788,6 +939,7 @@ class KunoRealtimeClient {
       const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
       if (hasTauri) {
         void platformAdapter.deletePartFile(message.transferId).catch(() => undefined);
+        void platformAdapter.cancelNativeReceive(message.transferId).catch(() => undefined);
       }
       this.callbacks?.onAssetCancelled({
         id: message.id,
@@ -811,6 +963,7 @@ class KunoRealtimeClient {
       if (!existing) {
         this.pausedTransfers.set(message.transferId, { resolve: () => undefined });
       }
+      void platformAdapter.pauseNativeSend(message.transferId).catch(() => undefined);
       this.callbacks?.onAssetPaused({ id: message.id, transferId: message.transferId });
       return;
     }
@@ -821,6 +974,7 @@ class KunoRealtimeClient {
         waiter.resolve();
         this.pausedTransfers.delete(message.transferId);
       }
+      void platformAdapter.resumeNativeSend(message.transferId).catch(() => undefined);
       this.callbacks?.onAssetResumed({ id: message.id, transferId: message.transferId });
       return;
     }
@@ -851,7 +1005,9 @@ class KunoRealtimeClient {
     const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
     let receivedBytes = 0;
     if (hasTauri) {
-      receivedBytes = await platformAdapter.getPartFileSize(asset.transferId, asset.size).catch(() => 0);
+      receivedBytes = asset.nativeKey
+        ? await platformAdapter.inspectPartFileSize(asset.transferId).catch(() => 0)
+        : await platformAdapter.getPartFileSize(asset.transferId, asset.size).catch(() => 0);
       if (!Number.isSafeInteger(receivedBytes) || receivedBytes < 0 || receivedBytes > asset.size) {
         await platformAdapter.deletePartFile(asset.transferId).catch(() => undefined);
         receivedBytes = 0;
@@ -967,6 +1123,35 @@ class KunoRealtimeClient {
     });
   }
 
+  reportNativeIncomingTransfer(input: {
+    transferId: string;
+    transferredBytes: number;
+    phase: "progress" | "complete" | "failed";
+    message?: string;
+  }) {
+    const transfer = this.incomingTransfers.get(input.transferId);
+    if (!transfer) {
+      return;
+    }
+    if (input.phase === "failed") {
+      this.failIncomingTransfer(transfer, input.message ?? "Native transfer failed.");
+      return;
+    }
+    if (
+      !Number.isSafeInteger(input.transferredBytes) ||
+      input.transferredBytes < transfer.receivedBytes ||
+      input.transferredBytes > transfer.meta.size
+    ) {
+      this.failIncomingTransfer(transfer, "Native transfer progress is invalid.");
+      return;
+    }
+    transfer.receivedBytes = input.transferredBytes;
+    this.reportIncomingProgress(transfer);
+    if (input.phase === "complete") {
+      void this.completeIncomingTransferIfReady(input.transferId);
+    }
+  }
+
   private failIncomingTransfer(transfer: IncomingTransfer, message: string) {
     if (transfer.failed) {
       return;
@@ -974,6 +1159,7 @@ class KunoRealtimeClient {
     transfer.failed = true;
     this.incomingTransfers.delete(transfer.meta.transferId);
     void platformAdapter.deletePartFile(transfer.meta.transferId).catch(() => undefined);
+    void platformAdapter.cancelNativeReceive(transfer.meta.transferId).catch(() => undefined);
     this.callbacks?.onAssetFailed({
       id: transfer.meta.messageId,
       transferId: transfer.meta.transferId,

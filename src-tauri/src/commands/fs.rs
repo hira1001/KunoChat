@@ -27,8 +27,8 @@ pub struct FileMetadata {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PartFilePreparation {
-    path: String,
-    size: u64,
+    pub(crate) path: String,
+    pub(crate) size: u64,
 }
 
 #[tauri::command]
@@ -112,33 +112,13 @@ pub async fn prepare_part_file(
     expected_size: u64,
     save_folder: Option<String>,
 ) -> Result<PartFilePreparation, String> {
-    if expected_size > MAX_TRANSFER_BYTES {
-        return Err("transfer exceeds the configured size limit".to_string());
-    }
-
-    let part_path = part_path(&transfer_id, save_folder.as_deref())?;
+    let (part_path, size) = prepare_part_path(&transfer_id, expected_size, save_folder.as_deref())?;
     let parts_dir = part_path
         .parent()
         .ok_or_else(|| "part directory not found".to_string())?;
-    std::fs::create_dir_all(parts_dir).map_err(|error| error.to_string())?;
     app.fs_scope()
         .allow_directory(parts_dir, true)
         .map_err(|error| error.to_string())?;
-
-    let size = if part_path.exists() {
-        let metadata = std::fs::metadata(&part_path).map_err(|error| error.to_string())?;
-        if !metadata.is_file() {
-            return Err("part path is not a file".to_string());
-        }
-        metadata.len()
-    } else {
-        File::create(&part_path).map_err(|error| error.to_string())?;
-        0
-    };
-
-    if size > expected_size {
-        return Err("existing part file exceeds the declared transfer size".to_string());
-    }
 
     Ok(PartFilePreparation {
         path: part_path.to_string_lossy().to_string(),
@@ -211,7 +191,7 @@ fn default_downloads_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "downloads directory not found".to_string())
 }
 
-fn resolve_save_dir(save_folder: Option<&str>) -> Result<PathBuf, String> {
+pub(crate) fn resolve_save_dir(save_folder: Option<&str>) -> Result<PathBuf, String> {
     let selected = save_folder
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -237,7 +217,7 @@ fn expand_home_path(value: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(value))
 }
 
-fn validate_transfer_id(transfer_id: &str) -> Result<(), String> {
+pub(crate) fn validate_transfer_id(transfer_id: &str) -> Result<(), String> {
     if transfer_id.is_empty() || transfer_id.len() > MAX_TRANSFER_ID_LENGTH {
         return Err("invalid transfer id".to_string());
     }
@@ -251,11 +231,44 @@ fn validate_transfer_id(transfer_id: &str) -> Result<(), String> {
     }
 }
 
-fn part_path(transfer_id: &str, save_folder: Option<&str>) -> Result<PathBuf, String> {
+pub(crate) fn part_path(transfer_id: &str, save_folder: Option<&str>) -> Result<PathBuf, String> {
     validate_transfer_id(transfer_id)?;
     Ok(resolve_save_dir(save_folder)?
         .join(".parts")
         .join(format!("{transfer_id}.part")))
+}
+
+pub(crate) fn prepare_part_path(
+    transfer_id: &str,
+    expected_size: u64,
+    save_folder: Option<&str>,
+) -> Result<(PathBuf, u64), String> {
+    if expected_size > MAX_TRANSFER_BYTES {
+        return Err("transfer exceeds the configured size limit".to_string());
+    }
+
+    let part_path = part_path(transfer_id, save_folder)?;
+    let parts_dir = part_path
+        .parent()
+        .ok_or_else(|| "part directory not found".to_string())?;
+    std::fs::create_dir_all(parts_dir).map_err(|error| error.to_string())?;
+
+    let size = if part_path.exists() {
+        let metadata = std::fs::metadata(&part_path).map_err(|error| error.to_string())?;
+        if !metadata.is_file() {
+            return Err("part path is not a file".to_string());
+        }
+        metadata.len()
+    } else {
+        File::create(&part_path).map_err(|error| error.to_string())?;
+        0
+    };
+
+    if size > expected_size {
+        return Err("existing part file exceeds the declared transfer size".to_string());
+    }
+
+    Ok((part_path, size))
 }
 
 fn canonical_file_path(path: &str) -> Result<PathBuf, String> {

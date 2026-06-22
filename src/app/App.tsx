@@ -27,6 +27,24 @@ type AutoConnectPayload = {
   source?: "lan" | "tailscale";
 };
 
+function nativeEndpointForPeer(peerHint: string): string | undefined {
+  const host = peerHint.trim();
+  if (!host) {
+    return undefined;
+  }
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]:8790` : `${host}:8790`;
+}
+
+type NativeTransferEvent = {
+  messageId: string;
+  transferId: string;
+  direction: "incoming" | "outgoing";
+  phase: "progress" | "complete" | "failed";
+  transferredBytes: number;
+  totalBytes: number;
+  message?: string;
+};
+
 type ConnectionDiagnostic = {
   tone: "info" | "warning" | "danger";
   title: string;
@@ -263,8 +281,39 @@ export function App() {
           localPeerId: sessionPeerId,
           displayName: state.settings.displayName || "You",
           mode: event.payload.mode,
-          signalingUrl: event.payload.signalingUrl
+          signalingUrl: event.payload.signalingUrl,
+          nativeEndpoint: nativeEndpointForPeer(event.payload.peerHint)
         }).catch(() => undefined);
+      }),
+      listen<NativeTransferEvent>("kuno:native-transfer", (event) => {
+        const transfer = event.payload;
+        if (!Number.isSafeInteger(transfer.transferredBytes) || !Number.isSafeInteger(transfer.totalBytes)) {
+          return;
+        }
+        if (transfer.direction === "incoming") {
+          realtimeClient.reportNativeIncomingTransfer({
+            transferId: transfer.transferId,
+            transferredBytes: transfer.transferredBytes,
+            phase: transfer.phase,
+            message: transfer.message
+          });
+          return;
+        }
+        if (transfer.phase === "failed") {
+          failTransfer({
+            messageId: transfer.messageId,
+            transferId: transfer.transferId,
+            message: transfer.message ?? "Native transfer failed."
+          });
+          return;
+        }
+        const progress = transfer.totalBytes === 0 ? 100 : Math.min(100, Math.round((transfer.transferredBytes / transfer.totalBytes) * 100));
+        updateTransferProgress({
+          messageId: transfer.messageId,
+          transferId: transfer.transferId,
+          progress,
+          receivedBytes: transfer.transferredBytes
+        });
       }),
       listen<{ paths: string[] }>("tauri://drag-drop", async (event) => {
         if (useChatStore.getState().connectionStatus !== "connected") {
@@ -435,7 +484,8 @@ export function App() {
       localPeerId: sessionPeerId,
       displayName: settings.displayName || "You",
       mode: payload.mode,
-      signalingUrl: payload.signalingUrl
+      signalingUrl: payload.signalingUrl,
+      nativeEndpoint: nativeEndpointForPeer(payload.peerHint)
     }).catch(() => undefined);
   }
 

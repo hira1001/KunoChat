@@ -729,7 +729,7 @@ export const useChatStore = create<ChatStore>()(
 
         const assets = message.asset ? [message.asset] : (message.bundle?.items ?? []);
         for (const asset of assets) {
-          const byteOffset = await platformAdapter.getPartFileSize(asset.transferId, asset.size).catch(() => 0) || 0;
+          const byteOffset = await platformAdapter.inspectPartFileSize(asset.transferId).catch(() => 0) || 0;
           realtimeClient.requestTransfer(messageId, asset.transferId, byteOffset);
         }
       }

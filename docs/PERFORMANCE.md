@@ -2,6 +2,8 @@
 
 KunoChat optimizes the direct peer path: instant control messages use a separate WebRTC channel from file bytes, and native file I/O keeps chunks binary. That reduces avoidable local work; it does not override the speed of a user's network or guarantee a universal win over every service.
 
+On automatic LAN/Tailscale connections, the preferred file path is a Rust-native encrypted stream on TCP port `8790`. WebRTC control carries the one-time transfer key and completion state; the WebView never receives file bytes on this path. The WebRTC binary path remains the fallback for manual pairing and unreachable direct endpoints.
+
 ## Metrics
 
 Measure these values with two installed release builds, recording p50 and p95 for at least 100 text sends and three runs per file size:
@@ -27,6 +29,7 @@ Measure these values with two installed release builds, recording p50 and p95 fo
 - No text message loss or duplicate render.
 - No file checksum mismatch, size mismatch, or false `received` state.
 - No control-message stall while a 1 GB binary transfer is active.
+- Verify the native encrypted path is selected for LAN/Tailscale, and verify the WebRTC fallback remains correct when port `8790` is unreachable.
 - Record hardware, OS version, Wi-Fi/Ethernet condition, Tailscale relay/direct path, and available bandwidth with every result.
 - Treat a regression of more than 10% from the established p95 baseline as a release blocker until explained.
 

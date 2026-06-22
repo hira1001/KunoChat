@@ -91,6 +91,7 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 - Bundled files use independent transfer IDs so each binary stream can be tracked separately.
 - File integrity verification with SHA-256 metadata and native receive-side hash checks before the final file move.
 - Native file reads and part-file writes use reusable Tauri binary file handles; transfer chunks are not expanded into JavaScript number arrays on the critical path.
+- LAN/Tailscale auto-connect uses an encrypted Rust-native file stream so file bodies bypass the WebView entirely; WebRTC remains the instant control and fallback transport.
 - Image preview generation never blocks an `asset-start` control message or the first binary bytes.
 - Received files are saved locally under `Downloads/KunoChat` and keep their saved path for reveal/open flows.
 - Optimistic send UX: Send immediately renders locally, clears the composer, then updates `queued -> sending -> received` as the peer requests and verifies file bytes.

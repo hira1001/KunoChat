@@ -30,6 +30,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             native::signal_server::start(8787);
+            native::transfer::start(app);
             native::peer_discovery::start(app.handle().clone());
             native::tailscale_discovery::start(app.handle().clone());
             native::tray::build_tray(app)?;
@@ -66,6 +67,12 @@ pub fn run() {
             fs::get_part_file_size,
             fs::finalize_part_file,
             fs::delete_part_file,
+            native::transfer::prepare_native_receive,
+            native::transfer::cancel_native_receive,
+            native::transfer::cancel_native_send,
+            native::transfer::pause_native_send,
+            native::transfer::resume_native_send,
+            native::transfer::send_native_file,
             opener::open_path,
             opener::reveal_path,
             notification::notify_message,

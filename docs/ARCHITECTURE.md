@@ -26,6 +26,9 @@ Sending should feel immediate:
 - The `binary` channel is reserved for file/image chunks only.
 - Large file transfer must never block control messages.
 - Sender-side SHA-256 runs in parallel with binary transfer; large files do not wait for hashing before bytes start moving.
+- On LAN and Tailscale auto-connect routes, file bodies use the native encrypted stream on TCP port `8790`. Rust reads the source file, applies ChaCha20-Poly1305 to each bounded frame, and writes the receiver part file without routing bytes through the WebView.
+- The 256-bit native transfer key is generated per transfer and is delivered only through the already encrypted WebRTC control channel. Native TCP headers contain only the transfer ID and per-connection nonce.
+- Native direct transfer falls back to the WebRTC binary channel when the receiver endpoint cannot be reached before a native connection is established. Manual pairing keeps the WebRTC binary path because it has no verified direct endpoint.
 - Native source files are granted to the Tauri fs scope one exact path at a time, then read through a reusable binary `FileHandle`. This avoids reopening the file and converting every chunk to a JavaScript number array.
 - Native receive part files are prepared and size-limited in Rust, then streamed through a reusable binary `FileHandle`. The handle is closed before Rust performs final size and SHA-256 verification plus the atomic move into the save folder.
 - Image thumbnail work is outside the `asset-start` path. It must not delay metadata delivery or the peer's transfer request.

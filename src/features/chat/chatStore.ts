@@ -727,10 +727,10 @@ export const useChatStore = create<ChatStore>()(
 
         get().markMessageStatus(messageId, "receiving");
 
-        const transferIds = message.asset ? [message.asset.transferId] : (message.bundle?.items.map((i) => i.transferId) ?? []);
-        for (const transferId of transferIds) {
-          const byteOffset = await platformAdapter.getPartFileSize(transferId).catch(() => 0) || 0;
-          realtimeClient.requestTransfer(messageId, transferId, byteOffset);
+        const assets = message.asset ? [message.asset] : (message.bundle?.items ?? []);
+        for (const asset of assets) {
+          const byteOffset = await platformAdapter.getPartFileSize(asset.transferId, asset.size).catch(() => 0) || 0;
+          realtimeClient.requestTransfer(messageId, asset.transferId, byteOffset);
         }
       }
     }),

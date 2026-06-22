@@ -581,68 +581,6 @@ export function App() {
   );
 }
 
-async function readEntireFile(localPath: string, size: number): Promise<Blob> {
-  const chunks: ArrayBuffer[] = [];
-  let offset = 0;
-  const chunkSize = 1024 * 1024; // 1MB chunks
-  while (offset < size) {
-    const chunk = await platformAdapter.readFileChunk(localPath, offset, Math.min(chunkSize, size - offset));
-    if (chunk.byteLength === 0) {
-      break;
-    }
-    chunks.push(chunk);
-    offset += chunk.byteLength;
-  }
-  return new Blob(chunks);
-}
-
-function generateThumbnail(fileOrBlob: Blob): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    if (!fileOrBlob.type.startsWith("image/")) {
-      resolve(undefined);
-      return;
-    }
-    const url = URL.createObjectURL(fileOrBlob);
-    const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      try {
-        const maxDim = 100;
-        let width = img.width;
-        let height = img.height;
-        if (width > maxDim || height > maxDim) {
-          if (width > height) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          } else {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-        }
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, width, height);
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.5);
-          resolve(dataUrl);
-        } else {
-          resolve(undefined);
-        }
-      } catch (err) {
-        console.error("Failed to generate thumbnail canvas:", err);
-        resolve(undefined);
-      }
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      resolve(undefined);
-    };
-    img.src = url;
-  });
-}
-
 async function sendRealtimeMessage(message: ChatMessage) {
   if (message.kind === "text" && message.text) {
     realtimeClient.sendText({
@@ -685,20 +623,9 @@ async function sendRealtimeMessage(message: ChatMessage) {
     };
 
     const sha256 = sha256ForAsset(modifiedAsset);
-    let thumbnail: string | undefined = undefined;
-    if (modifiedAsset.kind === "image" || modifiedAsset.mime.startsWith("image/")) {
-      try {
-        let blob: Blob | undefined = modifiedAsset.file;
-        if (!blob && modifiedAsset.localPath) {
-          blob = await readEntireFile(modifiedAsset.localPath, modifiedAsset.size);
-        }
-        if (blob) {
-          thumbnail = await generateThumbnail(blob);
-        }
-      } catch (err) {
-        console.error("Failed to generate sender thumbnail:", err);
-      }
-    }
+    // A preview must never delay the asset-start control message. Native images
+    // are previewed after receipt; browser Files may already carry a thumbnail.
+    const thumbnail = modifiedAsset.thumbnail;
 
     await realtimeClient.sendAsset(
       {
@@ -715,7 +642,7 @@ async function sendRealtimeMessage(message: ChatMessage) {
         thumbnail,
         isFolder: message.asset.isFolder
       },
-      createBinarySource(modifiedAsset),
+      await createBinarySource(modifiedAsset),
       { sha256 }
     );
     return;
@@ -752,20 +679,7 @@ async function sendRealtimeMessage(message: ChatMessage) {
       };
 
       const sha256 = sha256ForAsset(modifiedItem);
-      let thumbnail: string | undefined = undefined;
-      if (modifiedItem.kind === "image" || modifiedItem.mime.startsWith("image/")) {
-        try {
-          let blob: Blob | undefined = modifiedItem.file;
-          if (!blob && modifiedItem.localPath) {
-            blob = await readEntireFile(modifiedItem.localPath, modifiedItem.size);
-          }
-          if (blob) {
-            thumbnail = await generateThumbnail(blob);
-          }
-        } catch (err) {
-          console.error("Failed to generate sender bundle item thumbnail:", err);
-        }
-      }
+      const thumbnail = modifiedItem.thumbnail;
 
       await realtimeClient.sendAsset(
         {
@@ -783,7 +697,7 @@ async function sendRealtimeMessage(message: ChatMessage) {
           thumbnail,
           isFolder: item.isFolder
         },
-        createBinarySource(modifiedItem),
+        await createBinarySource(modifiedItem),
         { sha256 }
       );
     }
@@ -793,7 +707,7 @@ async function sendRealtimeMessage(message: ChatMessage) {
   throw new Error("This message does not contain a readable payload.");
 }
 
-function createBinarySource(asset: NonNullable<ChatMessage["asset"]> | NonNullable<ChatMessage["bundle"]>["items"][number]): File | RealtimeBinarySource {
+async function createBinarySource(asset: NonNullable<ChatMessage["asset"]> | NonNullable<ChatMessage["bundle"]>["items"][number]): Promise<File | RealtimeBinarySource> {
   if (asset.file) {
     return asset.file;
   }
@@ -802,10 +716,7 @@ function createBinarySource(asset: NonNullable<ChatMessage["asset"]> | NonNullab
     throw new Error(`${asset.name} is not readable from this session.`);
   }
 
-  return {
-    size: asset.size,
-    readChunk: (offset, length) => platformAdapter.readFileChunk(asset.localPath!, offset, length)
-  };
+  return platformAdapter.createNativeBinarySource(asset.localPath, asset.size);
 }
 
 async function persistReceivedAsset(

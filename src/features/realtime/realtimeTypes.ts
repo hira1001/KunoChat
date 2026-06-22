@@ -36,6 +36,7 @@ export type RealtimeAssetMeta = {
 export type RealtimeBinarySource = {
   size: number;
   readChunk: (offset: number, length: number) => Promise<ArrayBuffer>;
+  close?: () => Promise<void>;
 };
 
 export type RealtimeControlMessage =

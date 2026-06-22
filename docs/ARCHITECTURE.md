@@ -26,6 +26,9 @@ Sending should feel immediate:
 - The `binary` channel is reserved for file/image chunks only.
 - Large file transfer must never block control messages.
 - Sender-side SHA-256 runs in parallel with binary transfer; large files do not wait for hashing before bytes start moving.
+- Native source files are granted to the Tauri fs scope one exact path at a time, then read through a reusable binary `FileHandle`. This avoids reopening the file and converting every chunk to a JavaScript number array.
+- Native receive part files are prepared and size-limited in Rust, then streamed through a reusable binary `FileHandle`. The handle is closed before Rust performs final size and SHA-256 verification plus the atomic move into the save folder.
+- Image thumbnail work is outside the `asset-start` path. It must not delay metadata delivery or the peer's transfer request.
 - `asset-complete` is not trusted by itself; a receiver completes only after expected binary bytes arrive, native storage confirms the declared size, and the sender hash matches when supplied.
 - WebSocket signaling remains setup-only, so send speed does not depend on uploading content to a server.
 - Installed desktop apps on the same Wi-Fi/LAN do not need a separate signaling command; the server is embedded in the app process.

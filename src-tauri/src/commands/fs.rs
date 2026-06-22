@@ -5,10 +5,11 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
+use tauri::AppHandle;
+use tauri_plugin_fs::FsExt;
 use zip::write::FileOptions;
 
 const MAX_READ_CHUNK_BYTES: u64 = 1024 * 1024;
-const MAX_PART_CHUNK_BYTES: usize = 1024 * 1024;
 const MAX_TRANSFER_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 const MAX_TRANSFER_ID_LENGTH: usize = 128;
 const MAX_ZIP_ENTRIES: usize = 10_000;
@@ -21,6 +22,13 @@ pub struct FileMetadata {
     size: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     local_path: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartFilePreparation {
+    path: String,
+    size: u64,
 }
 
 #[tauri::command]
@@ -82,6 +90,59 @@ pub async fn file_metadata(path: String) -> Result<FileMetadata, String> {
             .to_string(),
         size: metadata.len(),
         local_path: None,
+    })
+}
+
+/// Allows the exact user-selected source file through the Tauri fs scope.
+/// The frontend then uses the plugin's binary FileHandle IPC instead of a JSON
+/// byte array for every transfer chunk.
+#[tauri::command]
+pub async fn grant_file_read_access(app: AppHandle, path: String) -> Result<String, String> {
+    let path = canonical_file_path(&path)?;
+    app.fs_scope()
+        .allow_file(&path)
+        .map_err(|error| error.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn prepare_part_file(
+    app: AppHandle,
+    transfer_id: String,
+    expected_size: u64,
+    save_folder: Option<String>,
+) -> Result<PartFilePreparation, String> {
+    if expected_size > MAX_TRANSFER_BYTES {
+        return Err("transfer exceeds the configured size limit".to_string());
+    }
+
+    let part_path = part_path(&transfer_id, save_folder.as_deref())?;
+    let parts_dir = part_path
+        .parent()
+        .ok_or_else(|| "part directory not found".to_string())?;
+    std::fs::create_dir_all(parts_dir).map_err(|error| error.to_string())?;
+    app.fs_scope()
+        .allow_directory(parts_dir, true)
+        .map_err(|error| error.to_string())?;
+
+    let size = if part_path.exists() {
+        let metadata = std::fs::metadata(&part_path).map_err(|error| error.to_string())?;
+        if !metadata.is_file() {
+            return Err("part path is not a file".to_string());
+        }
+        metadata.len()
+    } else {
+        File::create(&part_path).map_err(|error| error.to_string())?;
+        0
+    };
+
+    if size > expected_size {
+        return Err("existing part file exceeds the declared transfer size".to_string());
+    }
+
+    Ok(PartFilePreparation {
+        path: part_path.to_string_lossy().to_string(),
+        size,
     })
 }
 
@@ -358,43 +419,6 @@ pub async fn unzip_file(zip_path: String, dest_dir: String) -> Result<String, St
     let _ = std::fs::remove_file(&zip_path_buf);
 
     Ok(dest_dir_buf.to_string_lossy().into_owned())
-}
-
-#[tauri::command]
-pub async fn write_part_chunk(
-    transfer_id: String,
-    bytes: Vec<u8>,
-    expected_size: u64,
-    save_folder: Option<String>,
-) -> Result<u64, String> {
-    if expected_size > MAX_TRANSFER_BYTES || bytes.len() > MAX_PART_CHUNK_BYTES {
-        return Err("transfer exceeds the configured size limit".to_string());
-    }
-    let part_path = part_path(&transfer_id, save_folder.as_deref())?;
-    let parts_dir = part_path
-        .parent()
-        .ok_or_else(|| "part directory not found".to_string())?;
-    std::fs::create_dir_all(&parts_dir).map_err(|e| e.to_string())?;
-    let existing_size = std::fs::metadata(&part_path)
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
-    let next_size = existing_size
-        .checked_add(bytes.len() as u64)
-        .ok_or_else(|| "part file size overflow".to_string())?;
-    if next_size > expected_size {
-        return Err("received data exceeds the declared transfer size".to_string());
-    }
-
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open(&part_path)
-        .map_err(|e| e.to_string())?;
-
-    file.write_all(&bytes).map_err(|e| e.to_string())?;
-    let metadata = std::fs::metadata(&part_path).map_err(|e| e.to_string())?;
-    Ok(metadata.len())
 }
 
 #[tauri::command]

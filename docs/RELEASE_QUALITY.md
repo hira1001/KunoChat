@@ -56,3 +56,4 @@ Until those credentials exist, GitHub Releases are suitable for controlled beta 
 - Confirm corrupted transfer simulation fails integrity verification.
 - Confirm app restart does not show fake connected state.
 - Confirm OS titlebar, move, resize, minimize, and close behavior.
+- Run the two-machine measurements in `docs/PERFORMANCE.md` on both LAN and Tailscale before making any speed claim.

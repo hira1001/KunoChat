@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { open as openNativeFile, SeekMode, type FileHandle } from "@tauri-apps/plugin-fs";
 
 export type PlatformName = "windows" | "macos" | "linux" | "unknown";
 
@@ -34,8 +35,67 @@ export type NativeNotification = {
   body: string;
 };
 
+export type NativeBinaryFileSource = {
+  size: number;
+  readChunk: (offset: number, length: number) => Promise<ArrayBuffer>;
+  close: () => Promise<void>;
+};
+
+type PartFilePreparation = {
+  path: string;
+  size: number;
+};
+
+type NativePartWriter = {
+  expectedSize: number;
+  size: number;
+  handle: FileHandle;
+};
+
 const hasTauri = "__TAURI_INTERNALS__" in window;
 let selectedSaveFolder: string | undefined;
+const partWriters = new Map<string, NativePartWriter>();
+
+async function closePartWriter(transferId: string): Promise<void> {
+  const writer = partWriters.get(transferId);
+  if (!writer) {
+    return;
+  }
+  partWriters.delete(transferId);
+  await writer.handle.close();
+}
+
+async function getPartWriter(transferId: string, expectedSize: number): Promise<NativePartWriter> {
+  if (!Number.isSafeInteger(expectedSize) || expectedSize < 0) {
+    throw new Error("Invalid expected transfer size.");
+  }
+
+  const existing = partWriters.get(transferId);
+  if (existing?.expectedSize === expectedSize) {
+    return existing;
+  }
+  if (existing) {
+    await closePartWriter(transferId);
+  }
+
+  const preparation = await invoke<PartFilePreparation>("prepare_part_file", {
+    transferId,
+    expectedSize,
+    saveFolder: selectedSaveFolder
+  });
+  const handle = await openNativeFile(preparation.path, {
+    append: true,
+    create: true,
+    write: true
+  });
+  const writer = {
+    expectedSize,
+    size: preparation.size,
+    handle
+  } satisfies NativePartWriter;
+  partWriters.set(transferId, writer);
+  return writer;
+}
 
 export const platformAdapter = {
   setSaveFolder(saveFolder: string | undefined): void {
@@ -134,6 +194,55 @@ export const platformAdapter = {
     return new Uint8Array(bytes).buffer;
   },
 
+  async createNativeBinarySource(path: string, size: number): Promise<NativeBinaryFileSource> {
+    if (!hasTauri) {
+      throw new Error("Native file reads are only available in Tauri.");
+    }
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw new Error("Invalid source file size.");
+    }
+
+    const scopedPath = await invoke<string>("grant_file_read_access", { path });
+    const handle = await openNativeFile(scopedPath, { read: true });
+    let currentOffset = 0;
+    let closed = false;
+
+    return {
+      size,
+      async readChunk(offset: number, length: number): Promise<ArrayBuffer> {
+        if (closed) {
+          throw new Error("Native source file is already closed.");
+        }
+        if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0 || offset > size) {
+          throw new Error("Invalid native file read range.");
+        }
+        const boundedLength = Math.min(length, size - offset);
+        if (boundedLength === 0) {
+          return new ArrayBuffer(0);
+        }
+        if (offset !== currentOffset) {
+          await handle.seek(offset, SeekMode.Start);
+        }
+
+        const buffer = new Uint8Array(boundedLength);
+        const bytesRead = await handle.read(buffer);
+        if (bytesRead === null) {
+          currentOffset = offset;
+          return new ArrayBuffer(0);
+        }
+        currentOffset = offset + bytesRead;
+        return bytesRead === buffer.byteLength ? buffer.buffer : buffer.slice(0, bytesRead).buffer;
+      },
+      async close(): Promise<void> {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        await handle.close();
+      }
+    };
+  },
+
   async fileSha256(path: string): Promise<string> {
     if (!hasTauri) {
       throw new Error("Native file hashing is only available in Tauri.");
@@ -155,26 +264,31 @@ export const platformAdapter = {
     if (!hasTauri) {
       throw new Error("writePartChunk is only available in Tauri.");
     }
-    const payload = Array.from(new Uint8Array(bytes));
-    return invoke<number>("write_part_chunk", {
-      transferId,
-      bytes: payload,
-      expectedSize,
-      saveFolder: selectedSaveFolder
-    });
+    const writer = await getPartWriter(transferId, expectedSize);
+    if (writer.size + bytes.byteLength > expectedSize) {
+      throw new Error("Received data exceeds the declared transfer size.");
+    }
+    const bytesWritten = await writer.handle.write(new Uint8Array(bytes));
+    if (bytesWritten !== bytes.byteLength) {
+      throw new Error("Native file write completed partially.");
+    }
+    writer.size += bytesWritten;
+    return writer.size;
   },
 
-  async getPartFileSize(transferId: string): Promise<number> {
+  async getPartFileSize(transferId: string, expectedSize: number): Promise<number> {
     if (!hasTauri) {
       return 0;
     }
-    return invoke<number>("get_part_file_size", { transferId, saveFolder: selectedSaveFolder });
+    const writer = await getPartWriter(transferId, expectedSize);
+    return writer.size;
   },
 
   async finalizePartFile(transferId: string, filename: string, expectedSize: number, sha256?: string): Promise<string> {
     if (!hasTauri) {
       throw new Error("finalizePartFile is only available in Tauri.");
     }
+    await closePartWriter(transferId);
     return invoke<string>("finalize_part_file", {
       transferId,
       filename,
@@ -188,6 +302,7 @@ export const platformAdapter = {
     if (!hasTauri) {
       return;
     }
+    await closePartWriter(transferId);
     await invoke<void>("delete_part_file", { transferId, saveFolder: selectedSaveFolder });
   },
 

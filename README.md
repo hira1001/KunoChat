@@ -90,6 +90,8 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 - Active outgoing transfers can be cancelled inline; cancellation is local-first and is relayed to the peer over `control`.
 - Bundled files use independent transfer IDs so each binary stream can be tracked separately.
 - File integrity verification with SHA-256 metadata and native receive-side hash checks before the final file move.
+- Native file reads and part-file writes use reusable Tauri binary file handles; transfer chunks are not expanded into JavaScript number arrays on the critical path.
+- Image preview generation never blocks an `asset-start` control message or the first binary bytes.
 - Received files are saved locally under `Downloads/KunoChat` and keep their saved path for reveal/open flows.
 - Optimistic send UX: Send immediately renders locally, clears the composer, then updates `queued -> sending -> received` as the peer requests and verifies file bytes.
 - Interrupted outgoing sends become retryable failures instead of getting stuck in `sending`.
@@ -115,3 +117,7 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 3. Add richer transfer controls for pausing, resuming, and per-file cancellation inside bundles.
 4. Run two-machine flaky-network and NAT traversal tests, adding TURN only when needed.
 5. Add publisher signing/notarization credentials for warning-free public distribution.
+
+## Performance Validation
+
+`docs/PERFORMANCE.md` defines the two-machine latency and throughput measurements required before claiming a production performance target. A direct P2P path can reduce relay latency, but no implementation can honestly claim to beat every network, device, and SaaS without measured comparisons.

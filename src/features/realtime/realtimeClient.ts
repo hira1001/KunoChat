@@ -53,6 +53,12 @@ function isValidAssetMeta(asset: RealtimeAssetMeta): boolean {
   );
 }
 
+function closeRealtimeBinarySource(source: File | RealtimeBinarySource) {
+  if (!(source instanceof File)) {
+    void source.close?.().catch(() => undefined);
+  }
+}
+
 class TransferCancelledError extends Error {
   constructor() {
     super("Transfer cancelled.");
@@ -116,7 +122,9 @@ class KunoRealtimeClient {
     this.closeTransport();
     this.incomingTransfers.clear();
     this.outgoingTransfers.clear();
-    this.pendingAssets.clear();
+    for (const transferId of this.pendingAssets.keys()) {
+      this.releasePendingAsset(transferId);
+    }
     for (const paused of this.pausedTransfers.values()) {
       paused.resolve();
     }
@@ -186,6 +194,7 @@ class KunoRealtimeClient {
 
   async sendAsset(meta: RealtimeAssetMeta, source: File | RealtimeBinarySource, options: SendAssetOptions = {}) {
     if (this.binary?.readyState !== "open") {
+      closeRealtimeBinarySource(source);
       throw new Error("Binary channel is not open.");
     }
     if (!isValidAssetMeta(meta) || source.size !== meta.size) {
@@ -256,6 +265,7 @@ class KunoRealtimeClient {
     const size = source.size;
     let lastProgress = -1;
     let lastProgressAt = 0;
+    let completed = false;
 
     try {
       if (size === 0) {
@@ -308,6 +318,7 @@ class KunoRealtimeClient {
         objectUrl: "",
         sha256
       });
+      completed = true;
     } catch (error) {
       if (error instanceof TransferCancelledError) {
         this.notifyTransferCancelledOnce(outgoingTransfer);
@@ -319,6 +330,26 @@ class KunoRealtimeClient {
       throw error;
     } finally {
       this.outgoingTransfers.delete(meta.transferId);
+      if (!completed) {
+        this.releasePendingAsset(meta.transferId);
+      }
+    }
+  }
+
+  private releasePendingAsset(transferId: string) {
+    const pending = this.pendingAssets.get(transferId);
+    if (!pending) {
+      return;
+    }
+    this.pendingAssets.delete(transferId);
+    closeRealtimeBinarySource(pending.source);
+  }
+
+  private releasePendingAssetsForMessage(messageId: string) {
+    for (const [transferId, pending] of this.pendingAssets) {
+      if (pending.meta.messageId === messageId) {
+        this.releasePendingAsset(transferId);
+      }
     }
   }
 
@@ -353,6 +384,9 @@ class KunoRealtimeClient {
     this.pausedTransfers.get(transferId)?.resolve();
     this.pausedTransfers.delete(transferId);
     this.notifyTransferCancelledOnce(outgoingTransfer, message);
+    if (!this.outgoingTransfers.has(transferId)) {
+      this.releasePendingAsset(transferId);
+    }
   }
 
   pauseTransfer(messageId: string, transferId: string) {
@@ -683,6 +717,7 @@ class KunoRealtimeClient {
     }
 
     if (message.type === "ack") {
+      this.releasePendingAssetsForMessage(message.id);
       this.callbacks?.onAck(message.id);
       return;
     }
@@ -734,6 +769,7 @@ class KunoRealtimeClient {
         this.callbacks?.onError("Rejected invalid transfer failure.");
         return;
       }
+      this.releasePendingAsset(message.transferId);
       this.callbacks?.onAssetFailed({
         id: message.id,
         transferId: message.transferId,
@@ -747,6 +783,7 @@ class KunoRealtimeClient {
         this.callbacks?.onError("Rejected invalid transfer cancellation.");
         return;
       }
+      this.releasePendingAsset(message.transferId);
       this.incomingTransfers.delete(message.transferId);
       const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
       if (hasTauri) {
@@ -814,7 +851,7 @@ class KunoRealtimeClient {
     const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
     let receivedBytes = 0;
     if (hasTauri) {
-      receivedBytes = await platformAdapter.getPartFileSize(asset.transferId).catch(() => 0);
+      receivedBytes = await platformAdapter.getPartFileSize(asset.transferId, asset.size).catch(() => 0);
       if (!Number.isSafeInteger(receivedBytes) || receivedBytes < 0 || receivedBytes > asset.size) {
         await platformAdapter.deletePartFile(asset.transferId).catch(() => undefined);
         receivedBytes = 0;

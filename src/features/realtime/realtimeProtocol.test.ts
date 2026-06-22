@@ -46,4 +46,13 @@ describe("binary channel chunk framing", () => {
     const decoded = decodeBinaryChunk(encodeBinaryChunk("max", bytes([255, 254, 253])));
     expect(Array.from(new Uint8Array(decoded.payload))).toEqual([255, 254, 253]);
   });
+
+  test("rejects a frame without a header", () => {
+    expect(() => decodeBinaryChunk(new ArrayBuffer(1))).toThrow("too short");
+  });
+
+  test("rejects a frame whose declared id exceeds its bytes", () => {
+    const frame = new Uint8Array([0, 8, 1, 2]).buffer;
+    expect(() => decodeBinaryChunk(frame)).toThrow("invalid id length");
+  });
 });

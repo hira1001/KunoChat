@@ -120,7 +120,7 @@ describe("chatStore", () => {
   test("creates file message for a single attachment", async () => {
     useChatStore.setState({ connectionStatus: "connected", attachments: [attachment({ id: "file_1" })] });
     await useChatStore.getState().sendDraft(vi.fn());
-    expect(useChatStore.getState().messages[0]).toMatchObject({ kind: "file", asset: { id: "file_1" } });
+    expect(useChatStore.getState().messages[0]).toMatchObject({ kind: "file", status: "queued", asset: { id: "file_1" } });
   });
 
   test("creates image message for a single image attachment", async () => {
@@ -172,6 +172,18 @@ describe("chatStore", () => {
     useChatStore.getState().updateTransferProgress({ messageId: "asset_msg", transferId: "tr_1", progress: 55 });
     expect(useChatStore.getState().messages[0].progress).toBe(55);
     expect(useChatStore.getState().transferStates.tr_1.progress).toBe(55);
+  });
+
+  test("moves an outgoing asset from queued to sending only when bytes begin transferring", async () => {
+    useChatStore.setState({ connectionStatus: "connected", attachments: [attachment({ id: "file_1" })] });
+    await useChatStore.getState().sendDraft(vi.fn());
+    const message = useChatStore.getState().messages[0];
+    const transferId = message.asset?.transferId ?? "";
+
+    useChatStore.getState().updateTransferProgress({ messageId: message.id, transferId, progress: 10, receivedBytes: 10 });
+
+    expect(useChatStore.getState().messages[0]).toMatchObject({ status: "sending", progress: 10 });
+    expect(useChatStore.getState().transferStates[transferId]).toMatchObject({ status: "sending", progress: 10 });
   });
 
   test("completes peer transfer with saved path", () => {
@@ -326,8 +338,8 @@ describe("chatStore", () => {
     await useChatStore.getState().retryMessage(messageId, transport);
 
     expect(transport).toHaveBeenCalledWith(expect.objectContaining({ id: messageId, status: "sending" }));
-    expect(useChatStore.getState().messages[0]).toMatchObject({ status: "sent", asset: { localPath: "/tmp/doc.pdf" } });
-    expect(useChatStore.getState().transferStates[transferId!]).toMatchObject({ status: "sent", progress: 100, localPath: "/tmp/doc.pdf" });
+    expect(useChatStore.getState().messages[0]).toMatchObject({ status: "queued", asset: { localPath: "/tmp/doc.pdf" } });
+    expect(useChatStore.getState().transferStates[transferId!]).toMatchObject({ status: "queued", progress: 0, localPath: "/tmp/doc.pdf" });
   });
 
   test("resets a failed incoming asset when the peer retries the same message", () => {
@@ -378,4 +390,3 @@ describe("chatStore", () => {
     expect(storedMsg?.asset?.thumbnail).toBe("data:image/jpeg;base64,abc");
   });
 });
-

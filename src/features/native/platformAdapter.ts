@@ -35,8 +35,13 @@ export type NativeNotification = {
 };
 
 const hasTauri = "__TAURI_INTERNALS__" in window;
+let selectedSaveFolder: string | undefined;
 
 export const platformAdapter = {
+  setSaveFolder(saveFolder: string | undefined): void {
+    selectedSaveFolder = saveFolder?.trim() || undefined;
+  },
+
   async showMainWindow(): Promise<void> {
     if (hasTauri) {
       await invoke("show_main_window");
@@ -143,36 +148,47 @@ export const platformAdapter = {
     }
 
     const payload = Array.from(new Uint8Array(bytes));
-    return invoke<string>("save_received_file", { filename: name, bytes: payload });
+    return invoke<string>("save_received_file", { filename: name, bytes: payload, saveFolder: selectedSaveFolder });
   },
 
-  async writePartChunk(transferId: string, bytes: ArrayBuffer): Promise<number> {
+  async writePartChunk(transferId: string, bytes: ArrayBuffer, expectedSize: number): Promise<number> {
     if (!hasTauri) {
       throw new Error("writePartChunk is only available in Tauri.");
     }
     const payload = Array.from(new Uint8Array(bytes));
-    return invoke<number>("write_part_chunk", { transferId, bytes: payload });
+    return invoke<number>("write_part_chunk", {
+      transferId,
+      bytes: payload,
+      expectedSize,
+      saveFolder: selectedSaveFolder
+    });
   },
 
   async getPartFileSize(transferId: string): Promise<number> {
     if (!hasTauri) {
       return 0;
     }
-    return invoke<number>("get_part_file_size", { transferId });
+    return invoke<number>("get_part_file_size", { transferId, saveFolder: selectedSaveFolder });
   },
 
-  async finalizePartFile(transferId: string, filename: string): Promise<string> {
+  async finalizePartFile(transferId: string, filename: string, expectedSize: number, sha256?: string): Promise<string> {
     if (!hasTauri) {
       throw new Error("finalizePartFile is only available in Tauri.");
     }
-    return invoke<string>("finalize_part_file", { transferId, filename });
+    return invoke<string>("finalize_part_file", {
+      transferId,
+      filename,
+      expectedSize,
+      sha256,
+      saveFolder: selectedSaveFolder
+    });
   },
 
   async deletePartFile(transferId: string): Promise<void> {
     if (!hasTauri) {
       return;
     }
-    await invoke<void>("delete_part_file", { transferId });
+    await invoke<void>("delete_part_file", { transferId, saveFolder: selectedSaveFolder });
   },
 
   async readEntireFile(path: string, size: number): Promise<ArrayBuffer> {

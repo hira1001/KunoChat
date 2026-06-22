@@ -26,7 +26,8 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+          cache: npm
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -38,7 +39,16 @@ jobs:
           rustup target add x86_64-apple-darwin
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
+
+      - name: Verify release candidate
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Verify Rust tests
+        working-directory: src-tauri
+        run: cargo test
 
       - name: Build and Package Tauri App
         uses: tauri-apps/tauri-action@v0

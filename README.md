@@ -89,9 +89,9 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 - Asset send failures notify the peer over `control` when the instant channel is still alive.
 - Active outgoing transfers can be cancelled inline; cancellation is local-first and is relayed to the peer over `control`.
 - Bundled files use independent transfer IDs so each binary stream can be tracked separately.
-- File integrity verification with SHA-256 metadata and receive-side hash checks.
+- File integrity verification with SHA-256 metadata and native receive-side hash checks before the final file move.
 - Received files are saved locally under `Downloads/KunoChat` and keep their saved path for reveal/open flows.
-- Optimistic send UX: Send immediately renders locally, clears the composer, then updates `sending -> sent -> received`.
+- Optimistic send UX: Send immediately renders locally, clears the composer, then updates `queued -> sending -> received` as the peer requests and verifies file bytes.
 - Interrupted outgoing sends become retryable failures instead of getting stuck in `sending`.
 - Failed/cancelled outgoing messages expose an inline Retry action and preserve local file references when available.
 - Teams-style typing indicator over the same instant control channel.
@@ -99,7 +99,7 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 - Drag & Drop and clipboard attachment parsing in the UI.
 - `+` file picker adapter for Tauri dialog with safe web fallback and native chunk reads.
 - Local settings and message history persistence in the UI layer.
-- Save folder selection from Settings.
+- Save folder selection from Settings, used by native part-file and final-file writes.
 - Strong message/asset/transfer TypeScript types.
 - Zustand app state for view, connection status, messages, draft, attachments, transfer states, and settings.
 - Native command/plugin boundaries for tray, shortcuts, notifications, file open/reveal, autostart, single instance, close-to-hide, window state, store, SQL, picked-file reads, and received-file saves.

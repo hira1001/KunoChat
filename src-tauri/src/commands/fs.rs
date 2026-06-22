@@ -8,6 +8,11 @@ use std::{
 use zip::write::FileOptions;
 
 const MAX_READ_CHUNK_BYTES: u64 = 1024 * 1024;
+const MAX_PART_CHUNK_BYTES: usize = 1024 * 1024;
+const MAX_TRANSFER_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+const MAX_TRANSFER_ID_LENGTH: usize = 128;
+const MAX_ZIP_ENTRIES: usize = 10_000;
+const MAX_UNZIPPED_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,16 +24,17 @@ pub struct FileMetadata {
 }
 
 #[tauri::command]
-pub async fn ensure_download_dir() -> Result<String, String> {
-    let dir = downloads_dir()?;
-    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+pub async fn ensure_download_dir(save_folder: Option<String>) -> Result<String, String> {
+    let dir = resolve_save_dir(save_folder.as_deref())?;
     Ok(dir.to_string_lossy().to_string())
 }
 
 #[tauri::command]
-pub async fn unique_save_path(filename: String) -> Result<String, String> {
-    let dir = downloads_dir()?;
-    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+pub async fn unique_save_path(
+    filename: String,
+    save_folder: Option<String>,
+) -> Result<String, String> {
+    let dir = resolve_save_dir(save_folder.as_deref())?;
 
     let candidate = dir.join(sanitize_filename(&filename));
     if !candidate.exists() {
@@ -40,7 +46,10 @@ pub async fn unique_save_path(filename: String) -> Result<String, String> {
         .and_then(|value| value.to_str())
         .unwrap_or("file")
         .to_string();
-    let extension = candidate.extension().and_then(|value| value.to_str()).unwrap_or("");
+    let extension = candidate
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
 
     for index in 2..1000 {
         let next_name = if extension.is_empty() {
@@ -117,8 +126,15 @@ pub async fn file_sha256(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn save_received_file(filename: String, bytes: Vec<u8>) -> Result<String, String> {
-    let save_path = PathBuf::from(unique_save_path(filename).await?);
+pub async fn save_received_file(
+    filename: String,
+    bytes: Vec<u8>,
+    save_folder: Option<String>,
+) -> Result<String, String> {
+    if bytes.len() as u64 > MAX_TRANSFER_BYTES {
+        return Err("received file exceeds the maximum supported size".to_string());
+    }
+    let save_path = PathBuf::from(unique_save_path(filename, save_folder).await?);
     if let Some(parent) = save_path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
@@ -128,10 +144,57 @@ pub async fn save_received_file(filename: String, bytes: Vec<u8>) -> Result<Stri
     Ok(save_path.to_string_lossy().to_string())
 }
 
-fn downloads_dir() -> Result<PathBuf, String> {
+fn default_downloads_dir() -> Result<PathBuf, String> {
     dirs::download_dir()
         .map(|path| path.join("KunoChat"))
         .ok_or_else(|| "downloads directory not found".to_string())
+}
+
+fn resolve_save_dir(save_folder: Option<&str>) -> Result<PathBuf, String> {
+    let selected = save_folder
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(expand_home_path)
+        .transpose()?
+        .unwrap_or(default_downloads_dir()?);
+    std::fs::create_dir_all(&selected).map_err(|error| error.to_string())?;
+    selected.canonicalize().map_err(|error| error.to_string())
+}
+
+fn expand_home_path(value: &str) -> Result<PathBuf, String> {
+    if value == "~" {
+        return dirs::home_dir().ok_or_else(|| "home directory not found".to_string());
+    }
+    if let Some(relative) = value
+        .strip_prefix("~/")
+        .or_else(|| value.strip_prefix("~\\"))
+    {
+        return dirs::home_dir()
+            .map(|home| home.join(relative))
+            .ok_or_else(|| "home directory not found".to_string());
+    }
+    Ok(PathBuf::from(value))
+}
+
+fn validate_transfer_id(transfer_id: &str) -> Result<(), String> {
+    if transfer_id.is_empty() || transfer_id.len() > MAX_TRANSFER_ID_LENGTH {
+        return Err("invalid transfer id".to_string());
+    }
+    if transfer_id
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        Ok(())
+    } else {
+        Err("invalid transfer id".to_string())
+    }
+}
+
+fn part_path(transfer_id: &str, save_folder: Option<&str>) -> Result<PathBuf, String> {
+    validate_transfer_id(transfer_id)?;
+    Ok(resolve_save_dir(save_folder)?
+        .join(".parts")
+        .join(format!("{transfer_id}.part")))
 }
 
 fn canonical_file_path(path: &str) -> Result<PathBuf, String> {
@@ -156,7 +219,7 @@ pub struct PathMetadata {
 pub async fn path_metadata(path: String) -> Result<PathMetadata, String> {
     let path_buf = Path::new(&path);
     let metadata = std::fs::metadata(path_buf).map_err(|error| error.to_string())?;
-    
+
     Ok(PathMetadata {
         name: path_buf
             .file_name()
@@ -177,21 +240,26 @@ fn zip_dir_recursive<W: Write + Seek>(
     for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
-        
-        let name = path.strip_prefix(src_dir)
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+
+        let name = path
+            .strip_prefix(src_dir)
             .map_err(|e| e.to_string())?
             .to_string_lossy()
             .replace('\\', "/");
 
-        if path.is_dir() {
-            zip.add_directory(&name, FileOptions::default()).map_err(|e| e.to_string())?;
+        if metadata.is_dir() {
+            zip.add_directory(&name, FileOptions::default())
+                .map_err(|e| e.to_string())?;
             zip_dir_recursive(src_dir, &path, zip)?;
-        } else if path.is_file() {
-            zip.start_file(&name, FileOptions::default()).map_err(|e| e.to_string())?;
+        } else if metadata.is_file() {
+            zip.start_file(&name, FileOptions::default())
+                .map_err(|e| e.to_string())?;
             let mut f = File::open(&path).map_err(|e| e.to_string())?;
-            let mut buffer = Vec::new();
-            f.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
-            zip.write_all(&buffer).map_err(|e| e.to_string())?;
+            std::io::copy(&mut f, zip).map_err(|e| e.to_string())?;
         }
     }
     Ok(())
@@ -256,8 +324,19 @@ pub async fn unzip_file(zip_path: String, dest_dir: String) -> Result<String, St
     let file = File::open(&zip_path_buf).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
 
+    if archive.len() > MAX_ZIP_ENTRIES {
+        return Err("archive contains too many entries".to_string());
+    }
+
+    let mut extracted_bytes = 0_u64;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
+        extracted_bytes = extracted_bytes
+            .checked_add(file.size())
+            .ok_or_else(|| "archive is too large".to_string())?;
+        if extracted_bytes > MAX_UNZIPPED_BYTES {
+            return Err("archive expands beyond the maximum supported size".to_string());
+        }
         let outpath = match file.enclosed_name() {
             Some(path) => dest_dir_buf.join(path),
             None => continue,
@@ -274,14 +353,6 @@ pub async fn unzip_file(zip_path: String, dest_dir: String) -> Result<String, St
             let mut outfile = File::create(&outpath).map_err(|e| e.to_string())?;
             std::io::copy(&mut file, &mut outfile).map_err(|e| e.to_string())?;
         }
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Some(mode) = file.unix_mode() {
-                let _ = std::fs::set_permissions(&outpath, std::fs::Permissions::from_mode(mode));
-            }
-        }
     }
 
     let _ = std::fs::remove_file(&zip_path_buf);
@@ -290,10 +361,29 @@ pub async fn unzip_file(zip_path: String, dest_dir: String) -> Result<String, St
 }
 
 #[tauri::command]
-pub async fn write_part_chunk(transfer_id: String, bytes: Vec<u8>) -> Result<u64, String> {
-    let parts_dir = downloads_dir()?.join(".parts");
+pub async fn write_part_chunk(
+    transfer_id: String,
+    bytes: Vec<u8>,
+    expected_size: u64,
+    save_folder: Option<String>,
+) -> Result<u64, String> {
+    if expected_size > MAX_TRANSFER_BYTES || bytes.len() > MAX_PART_CHUNK_BYTES {
+        return Err("transfer exceeds the configured size limit".to_string());
+    }
+    let part_path = part_path(&transfer_id, save_folder.as_deref())?;
+    let parts_dir = part_path
+        .parent()
+        .ok_or_else(|| "part directory not found".to_string())?;
     std::fs::create_dir_all(&parts_dir).map_err(|e| e.to_string())?;
-    let part_path = parts_dir.join(format!("{}.part", transfer_id));
+    let existing_size = std::fs::metadata(&part_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let next_size = existing_size
+        .checked_add(bytes.len() as u64)
+        .ok_or_else(|| "part file size overflow".to_string())?;
+    if next_size > expected_size {
+        return Err("received data exceeds the declared transfer size".to_string());
+    }
 
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -308,9 +398,11 @@ pub async fn write_part_chunk(transfer_id: String, bytes: Vec<u8>) -> Result<u64
 }
 
 #[tauri::command]
-pub async fn get_part_file_size(transfer_id: String) -> Result<u64, String> {
-    let parts_dir = downloads_dir()?.join(".parts");
-    let part_path = parts_dir.join(format!("{}.part", transfer_id));
+pub async fn get_part_file_size(
+    transfer_id: String,
+    save_folder: Option<String>,
+) -> Result<u64, String> {
+    let part_path = part_path(&transfer_id, save_folder.as_deref())?;
     if part_path.exists() {
         let metadata = std::fs::metadata(&part_path).map_err(|e| e.to_string())?;
         Ok(metadata.len())
@@ -320,14 +412,45 @@ pub async fn get_part_file_size(transfer_id: String) -> Result<u64, String> {
 }
 
 #[tauri::command]
-pub async fn finalize_part_file(transfer_id: String, filename: String) -> Result<String, String> {
-    let parts_dir = downloads_dir()?.join(".parts");
-    let part_path = parts_dir.join(format!("{}.part", transfer_id));
+pub async fn finalize_part_file(
+    transfer_id: String,
+    filename: String,
+    expected_size: u64,
+    sha256: Option<String>,
+    save_folder: Option<String>,
+) -> Result<String, String> {
+    if expected_size > MAX_TRANSFER_BYTES {
+        return Err("transfer exceeds the configured size limit".to_string());
+    }
+    let part_path = part_path(&transfer_id, save_folder.as_deref())?;
+    let parts_dir = part_path
+        .parent()
+        .ok_or_else(|| "part directory not found".to_string())?;
+    std::fs::create_dir_all(parts_dir).map_err(|error| error.to_string())?;
     if !part_path.exists() {
-        return Err("Part file does not exist".to_string());
+        if expected_size == 0 {
+            File::create(&part_path).map_err(|error| error.to_string())?;
+        } else {
+            return Err("part file does not exist".to_string());
+        }
+    }
+    let actual_size = std::fs::metadata(&part_path)
+        .map_err(|error| error.to_string())?
+        .len();
+    if actual_size != expected_size {
+        return Err("received file size does not match the declared transfer size".to_string());
+    }
+    if let Some(expected_hash) = sha256 {
+        if !is_sha256(&expected_hash) {
+            return Err("invalid sha256 digest".to_string());
+        }
+        let actual_hash = sha256_for_path(&part_path)?;
+        if !actual_hash.eq_ignore_ascii_case(&expected_hash) {
+            return Err("file integrity check failed".to_string());
+        }
     }
 
-    let dest_path = PathBuf::from(unique_save_path(filename).await?);
+    let dest_path = PathBuf::from(unique_save_path(filename, save_folder).await?);
     if let Some(parent) = dest_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -337,9 +460,11 @@ pub async fn finalize_part_file(transfer_id: String, filename: String) -> Result
 }
 
 #[tauri::command]
-pub async fn delete_part_file(transfer_id: String) -> Result<(), String> {
-    let parts_dir = downloads_dir()?.join(".parts");
-    let part_path = parts_dir.join(format!("{}.part", transfer_id));
+pub async fn delete_part_file(
+    transfer_id: String,
+    save_folder: Option<String>,
+) -> Result<(), String> {
+    let part_path = part_path(&transfer_id, save_folder.as_deref())?;
     if part_path.exists() {
         std::fs::remove_file(&part_path).map_err(|e| e.to_string())?;
     }
@@ -353,9 +478,27 @@ fn sanitize_filename(filename: &str) -> String {
         .to_string()
 }
 
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn sha256_for_path(path: &Path) -> Result<String, String> {
+    let mut file = File::open(path).map_err(|error| error.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let bytes_read = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::sanitize_filename;
+    use super::{is_sha256, sanitize_filename, validate_transfer_id};
 
     #[test]
     fn sanitize_filename_replaces_path_separators() {
@@ -364,11 +507,27 @@ mod tests {
 
     #[test]
     fn sanitize_filename_replaces_windows_reserved_chars() {
-        assert_eq!(sanitize_filename("a:b*c?d\"e<f>g|h.txt"), "a_b_c_d_e_f_g_h.txt");
+        assert_eq!(
+            sanitize_filename("a:b*c?d\"e<f>g|h.txt"),
+            "a_b_c_d_e_f_g_h.txt"
+        );
     }
 
     #[test]
     fn sanitize_filename_trims_whitespace() {
         assert_eq!(sanitize_filename("  file.txt  "), "file.txt");
+    }
+
+    #[test]
+    fn transfer_id_rejects_path_characters() {
+        assert!(validate_transfer_id("tr_01-asset").is_ok());
+        assert!(validate_transfer_id("../escape").is_err());
+        assert!(validate_transfer_id("C:\\temp").is_err());
+    }
+
+    #[test]
+    fn sha256_validation_requires_a_hex_digest() {
+        assert!(is_sha256(&"a".repeat(64)));
+        assert!(!is_sha256("not-a-hash"));
     }
 }

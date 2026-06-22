@@ -25,12 +25,33 @@ type IncomingTransfer = {
   chunks?: BlobPart[];
   receivedBytes: number;
   senderComplete: boolean;
-  writeQueue?: Promise<any>;
+  writeQueue?: Promise<void>;
+  failed?: boolean;
 };
 
 type SendAssetOptions = {
   sha256?: string | Promise<string | undefined> | undefined;
 };
+
+export const MAX_ASSET_SIZE_BYTES = 10 * 1024 * 1024 * 1024;
+const MAX_TRANSFER_ID_LENGTH = 128;
+
+function isValidTransferId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+}
+
+function isValidAssetMeta(asset: RealtimeAssetMeta): boolean {
+  return (
+    isValidTransferId(asset.transferId) &&
+    typeof asset.size === "number" &&
+    Number.isSafeInteger(asset.size) &&
+    asset.size >= 0 &&
+    asset.size <= MAX_ASSET_SIZE_BYTES &&
+    typeof asset.name === "string" &&
+    asset.name.length > 0 &&
+    asset.name.length <= 255
+  );
+}
 
 class TransferCancelledError extends Error {
   constructor() {
@@ -95,6 +116,11 @@ class KunoRealtimeClient {
     this.closeTransport();
     this.incomingTransfers.clear();
     this.outgoingTransfers.clear();
+    this.pendingAssets.clear();
+    for (const paused of this.pausedTransfers.values()) {
+      paused.resolve();
+    }
+    this.pausedTransfers.clear();
   }
 
   private closeTransport() {
@@ -162,12 +188,19 @@ class KunoRealtimeClient {
     if (this.binary?.readyState !== "open") {
       throw new Error("Binary channel is not open.");
     }
+    if (!isValidAssetMeta(meta) || source.size !== meta.size) {
+      throw new Error("Invalid asset metadata.");
+    }
 
     this.pendingAssets.set(meta.transferId, { meta, source, options });
     this.sendControl({ v: 1, type: "asset-start", asset: meta });
   }
 
   requestTransfer(messageId: string, transferId: string, byteOffset?: number) {
+    if (!isValidTransferId(transferId) || (byteOffset !== undefined && (!Number.isSafeInteger(byteOffset) || byteOffset < 0))) {
+      this.callbacks?.onError("Invalid transfer request.");
+      return;
+    }
     try {
       this.sendControl({ v: 1, type: "request-transfer", messageId, transferId, byteOffset });
     } catch (err) {
@@ -181,7 +214,13 @@ class KunoRealtimeClient {
       console.warn("[realtimeClient] request-transfer received, but no pending asset found for transferId:", transferId);
       return;
     }
-    this.pendingAssets.delete(transferId);
+    if (!isValidTransferId(transferId) || !Number.isSafeInteger(byteOffset ?? 0) || (byteOffset ?? 0) < 0 || (byteOffset ?? 0) > pending.source.size) {
+      this.notifyTransferFailed(pending.meta, "Invalid transfer resume offset.");
+      return;
+    }
+    if (this.outgoingTransfers.has(transferId)) {
+      return;
+    }
     void this.executeTransfer(pending.meta, pending.source, pending.options, byteOffset).catch((err) => {
       console.error("Transfer execution failed:", err);
     });
@@ -276,20 +315,25 @@ class KunoRealtimeClient {
       }
 
       const message = error instanceof Error ? error.message : "Asset transfer failed.";
-      try {
-        this.sendControl({
-          v: 1,
-          type: "asset-failed",
-          id: meta.messageId,
-          transferId: meta.transferId,
-          message
-        });
-      } catch {
-        // The instant channel may already be gone; the local retry state still handles recovery.
-      }
+      this.notifyTransferFailed(meta, message);
       throw error;
     } finally {
       this.outgoingTransfers.delete(meta.transferId);
+    }
+  }
+
+  private notifyTransferFailed(meta: RealtimeAssetMeta, message: string) {
+    this.callbacks?.onAssetFailed({ id: meta.messageId, transferId: meta.transferId, message });
+    try {
+      this.sendControl({
+        v: 1,
+        type: "asset-failed",
+        id: meta.messageId,
+        transferId: meta.transferId,
+        message
+      });
+    } catch {
+      // The local error state remains authoritative when the control channel is gone.
     }
   }
 
@@ -585,6 +629,7 @@ class KunoRealtimeClient {
       this.reconnectAttempts = 0;
       this.callbacks?.onStatus("connected");
       this.sendControl({ v: 1, type: "ping", at: Date.now() });
+      this.reannouncePendingAssets();
     };
     channel.onclose = () => {
       if (!this.manualDisconnect) {
@@ -621,7 +666,11 @@ class KunoRealtimeClient {
     };
     channel.onmessage = (event) => {
       if (event.data instanceof ArrayBuffer) {
-        this.handleBinaryChunk(event.data);
+        try {
+          this.handleBinaryChunk(event.data);
+        } catch {
+          this.callbacks?.onError("Invalid binary transfer frame received.");
+        }
       }
     };
   }
@@ -639,23 +688,28 @@ class KunoRealtimeClient {
     }
 
     if (message.type === "asset-start") {
-      const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-      this.incomingTransfers.set(message.asset.transferId, {
-        meta: message.asset,
-        chunks: hasTauri ? undefined : [],
-        receivedBytes: 0,
-        senderComplete: false
-      });
-      this.callbacks?.onAssetStart(message.asset);
+      if (!isValidAssetMeta(message.asset)) {
+        this.callbacks?.onError("Rejected invalid transfer metadata.");
+        return;
+      }
+      void this.registerIncomingTransfer(message.asset);
       return;
     }
 
     if (message.type === "request-transfer") {
+      if (!isValidTransferId(message.transferId)) {
+        this.callbacks?.onError("Rejected invalid transfer request.");
+        return;
+      }
       this.startPendingTransfer(message.transferId, message.byteOffset);
       return;
     }
 
     if (message.type === "asset-progress") {
+      if (!isValidTransferId(message.transferId) || !Number.isFinite(message.progress) || !Number.isSafeInteger(message.receivedBytes)) {
+        this.callbacks?.onError("Rejected invalid transfer progress.");
+        return;
+      }
       this.callbacks?.onAssetProgress({
         id: message.id,
         transferId: message.transferId,
@@ -676,6 +730,10 @@ class KunoRealtimeClient {
     }
 
     if (message.type === "asset-failed") {
+      if (!isValidTransferId(message.transferId)) {
+        this.callbacks?.onError("Rejected invalid transfer failure.");
+        return;
+      }
       this.callbacks?.onAssetFailed({
         id: message.id,
         transferId: message.transferId,
@@ -685,6 +743,10 @@ class KunoRealtimeClient {
     }
 
     if (message.type === "asset-cancelled") {
+      if (!isValidTransferId(message.transferId)) {
+        this.callbacks?.onError("Rejected invalid transfer cancellation.");
+        return;
+      }
       this.incomingTransfers.delete(message.transferId);
       const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
       if (hasTauri) {
@@ -738,6 +800,35 @@ class KunoRealtimeClient {
     this.control.send(JSON.stringify(message));
   }
 
+  private reannouncePendingAssets() {
+    for (const { meta } of this.pendingAssets.values()) {
+      try {
+        this.sendControl({ v: 1, type: "asset-start", asset: meta });
+      } catch {
+        return;
+      }
+    }
+  }
+
+  private async registerIncomingTransfer(asset: RealtimeAssetMeta) {
+    const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    let receivedBytes = 0;
+    if (hasTauri) {
+      receivedBytes = await platformAdapter.getPartFileSize(asset.transferId).catch(() => 0);
+      if (!Number.isSafeInteger(receivedBytes) || receivedBytes < 0 || receivedBytes > asset.size) {
+        await platformAdapter.deletePartFile(asset.transferId).catch(() => undefined);
+        receivedBytes = 0;
+      }
+    }
+    this.incomingTransfers.set(asset.transferId, {
+      meta: asset,
+      chunks: hasTauri ? undefined : [],
+      receivedBytes,
+      senderComplete: false
+    });
+    this.callbacks?.onAssetStart(asset);
+  }
+
   private async waitForBinaryBuffer() {
     if (!this.binary) {
       throw new Error("Binary channel is not open.");
@@ -782,40 +873,43 @@ class KunoRealtimeClient {
   private handleBinaryChunk(data: ArrayBuffer) {
     const chunk = decodeBinaryChunk(data);
     const transfer = this.incomingTransfers.get(chunk.transferId);
-    if (!transfer) {
+    if (!transfer || transfer.failed) {
+      return;
+    }
+
+    const nextReceivedBytes = transfer.receivedBytes + chunk.payload.byteLength;
+    if (!Number.isSafeInteger(nextReceivedBytes) || nextReceivedBytes > transfer.meta.size) {
+      this.failIncomingTransfer(transfer, "Received data exceeds the declared transfer size.");
       return;
     }
 
     const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
     if (hasTauri) {
-      if (!transfer.writeQueue) {
-        transfer.writeQueue = Promise.resolve();
-      }
-      transfer.writeQueue = transfer.writeQueue.then(async () => {
-        try {
-          const newSize = await platformAdapter.writePartChunk(chunk.transferId, chunk.payload);
+      const previousWrite = transfer.writeQueue ?? Promise.resolve();
+      transfer.writeQueue = previousWrite
+        .then(async () => {
+          if (transfer.failed) {
+            return;
+          }
+          const newSize = await platformAdapter.writePartChunk(chunk.transferId, chunk.payload, transfer.meta.size);
+          if (!Number.isSafeInteger(newSize) || newSize < transfer.receivedBytes || newSize > transfer.meta.size) {
+            throw new Error("Part file size is invalid.");
+          }
           transfer.receivedBytes = newSize;
-        } catch (err) {
-          console.error("[realtimeClient] Failed to write part chunk:", err);
-          transfer.receivedBytes += chunk.payload.byteLength;
-        }
-      });
+          this.reportIncomingProgress(transfer);
+        })
+        .catch((error) => {
+          this.failIncomingTransfer(transfer, error instanceof Error ? error.message : "Failed to save received data.");
+        });
     } else {
       if (!transfer.chunks) {
         transfer.chunks = [];
       }
       transfer.chunks.push(chunk.payload);
-      transfer.receivedBytes += chunk.payload.byteLength;
+      transfer.receivedBytes = nextReceivedBytes;
+      this.reportIncomingProgress(transfer);
     }
-
-    const progress = transfer.meta.size === 0 ? 100 : Math.min(100, Math.round((transfer.receivedBytes / transfer.meta.size) * 100));
-    this.callbacks?.onAssetProgress({
-      id: transfer.meta.messageId,
-      transferId: transfer.meta.transferId,
-      progress,
-      receivedBytes: transfer.receivedBytes
-    });
 
     if (hasTauri) {
       transfer.writeQueue?.then(() => {
@@ -823,6 +917,41 @@ class KunoRealtimeClient {
       });
     } else {
       void this.completeIncomingTransferIfReady(chunk.transferId);
+    }
+  }
+
+  private reportIncomingProgress(transfer: IncomingTransfer) {
+    const progress = transfer.meta.size === 0 ? 100 : Math.min(100, Math.round((transfer.receivedBytes / transfer.meta.size) * 100));
+    this.callbacks?.onAssetProgress({
+      id: transfer.meta.messageId,
+      transferId: transfer.meta.transferId,
+      progress,
+      receivedBytes: transfer.receivedBytes
+    });
+  }
+
+  private failIncomingTransfer(transfer: IncomingTransfer, message: string) {
+    if (transfer.failed) {
+      return;
+    }
+    transfer.failed = true;
+    this.incomingTransfers.delete(transfer.meta.transferId);
+    void platformAdapter.deletePartFile(transfer.meta.transferId).catch(() => undefined);
+    this.callbacks?.onAssetFailed({
+      id: transfer.meta.messageId,
+      transferId: transfer.meta.transferId,
+      message
+    });
+    try {
+      this.sendControl({
+        v: 1,
+        type: "asset-failed",
+        id: transfer.meta.messageId,
+        transferId: transfer.meta.transferId,
+        message
+      });
+    } catch {
+      // A disconnected peer cannot be notified, but the local state is already failed.
     }
   }
 
@@ -848,14 +977,18 @@ class KunoRealtimeClient {
           await transfer.writeQueue;
         }
 
-        savePath = await platformAdapter.finalizePartFile(transferId, transfer.meta.name);
+        savePath = await platformAdapter.finalizePartFile(
+          transferId,
+          transfer.meta.name,
+          transfer.meta.size,
+          transfer.meta.sha256
+        );
 
         if (transfer.meta.isFolder) {
           try {
-            const lastSlash = savePath.lastIndexOf("/") !== -1 ? savePath.lastIndexOf("/") : savePath.lastIndexOf("\\");
-            const destDir = savePath.substring(0, lastSlash);
-            await platformAdapter.unzipFile(savePath, destDir);
-            savePath = savePath.replace(/\.zip$/i, "");
+            const folderPath = savePath.replace(/\.zip$/i, "");
+            await platformAdapter.unzipFile(savePath, folderPath);
+            savePath = folderPath;
           } catch (err) {
             console.error("Failed to unzip folder:", err);
             throw new Error("受信したフォルダの解凍に失敗しました。");
@@ -938,6 +1071,9 @@ export const realtimeClient = new KunoRealtimeClient();
 
 export function encodeBinaryChunk(transferId: string, payload: ArrayBuffer): ArrayBuffer {
   const idBytes = new TextEncoder().encode(transferId);
+  if (idBytes.byteLength === 0 || idBytes.byteLength > 0xffff) {
+    throw new Error("Invalid transfer id length.");
+  }
   const output = new Uint8Array(2 + idBytes.byteLength + payload.byteLength);
   const view = new DataView(output.buffer);
   view.setUint16(0, idBytes.byteLength);
@@ -947,10 +1083,16 @@ export function encodeBinaryChunk(transferId: string, payload: ArrayBuffer): Arr
 }
 
 export function decodeBinaryChunk(data: ArrayBuffer): { transferId: string; payload: ArrayBuffer } {
+  if (data.byteLength < 2) {
+    throw new Error("Binary transfer frame is too short.");
+  }
   const view = new DataView(data);
   const idLength = view.getUint16(0);
   const idStart = 2;
   const payloadStart = idStart + idLength;
+  if (idLength === 0 || payloadStart > data.byteLength) {
+    throw new Error("Binary transfer frame has an invalid id length.");
+  }
   const transferId = new TextDecoder().decode(data.slice(idStart, payloadStart));
   return {
     transferId,

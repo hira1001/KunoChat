@@ -184,7 +184,7 @@ export const useChatStore = create<ChatStore>()(
 
         try {
           await transport(retryingMessage);
-          get().markMessageStatus(messageId, "sent");
+          get().markMessageStatus(messageId, retryingMessage.asset || retryingMessage.bundle ? "queued" : "sent");
         } catch (error) {
           if (get().messages.find((chatMessage) => chatMessage.id === messageId)?.status === "cancelled") {
             return;
@@ -332,6 +332,8 @@ export const useChatStore = create<ChatStore>()(
         set((state) => {
           const now = Date.now();
           const prev = state.transferStates[transferId];
+          const message = state.messages.find((candidate) => candidate.id === messageId);
+          const activeStatus = message?.sender === "me" ? "sending" : "receiving";
 
           let speed: number | undefined = prev?.speed;
           let eta: number | undefined = prev?.eta;
@@ -358,6 +360,10 @@ export const useChatStore = create<ChatStore>()(
               message.id === messageId
                 ? {
                     ...message,
+                    status:
+                      message.status === "queued" || message.status === "sending" || message.status === "receiving"
+                        ? activeStatus
+                        : message.status,
                     progress,
                     asset: message.asset ? { ...message.asset, progress } : message.asset
                   }
@@ -367,6 +373,10 @@ export const useChatStore = create<ChatStore>()(
               ...state.transferStates,
               [transferId]: {
                 ...(state.transferStates[transferId] ?? { transferId, status: "receiving", progress: 0 }),
+                status:
+                  prev?.status === "failed" || prev?.status === "cancelled" || prev?.status === "received"
+                    ? prev.status
+                    : activeStatus,
                 progress,
                 speed,
                 eta,
@@ -688,7 +698,7 @@ export const useChatStore = create<ChatStore>()(
 
         try {
           await transport(message);
-          get().markMessageStatus(message.id, "sent");
+          get().markMessageStatus(message.id, message.asset || message.bundle ? "queued" : "sent");
         } catch (error) {
           if (get().messages.find((chatMessage) => chatMessage.id === message.id)?.status === "cancelled") {
             return;

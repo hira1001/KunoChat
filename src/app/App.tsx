@@ -80,6 +80,10 @@ export function App() {
     void platformAdapter.positionTopRight();
   }, []);
 
+  useEffect(() => {
+    platformAdapter.setSaveFolder(settings.saveFolder);
+  }, [settings.saveFolder]);
+
   // OS dark mode sync
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -131,7 +135,8 @@ export function App() {
           size: asset.size,
           mime: asset.mime,
           sha256: asset.sha256,
-          thumbnail: asset.thumbnail
+          thumbnail: asset.thumbnail,
+          isFolder: asset.isFolder
         });
       },
       onAssetProgress: ({ id, transferId, progress, receivedBytes }) =>
@@ -653,6 +658,8 @@ async function sendRealtimeMessage(message: ChatMessage) {
   if ((message.kind === "file" || message.kind === "image") && message.asset) {
     let localPath = message.asset.localPath;
     let size = message.asset.size;
+    let name = message.asset.name;
+    let mime = message.asset.mime;
 
     if (message.asset.isFolder) {
       try {
@@ -660,6 +667,8 @@ async function sendRealtimeMessage(message: ChatMessage) {
         if (zipMeta.localPath) {
           localPath = zipMeta.localPath;
           size = zipMeta.size;
+          name = zipMeta.name;
+          mime = "application/zip";
         }
       } catch (err) {
         console.error("Failed to zip directory:", err);
@@ -670,7 +679,9 @@ async function sendRealtimeMessage(message: ChatMessage) {
     const modifiedAsset = {
       ...message.asset,
       localPath,
-      size
+      size,
+      name,
+      mime
     };
 
     const sha256 = sha256ForAsset(modifiedAsset);
@@ -714,6 +725,8 @@ async function sendRealtimeMessage(message: ChatMessage) {
     for (const item of message.bundle.items) {
       let localPath = item.localPath;
       let size = item.size;
+      let name = item.name;
+      let mime = item.mime;
 
       if (item.isFolder) {
         try {
@@ -721,6 +734,8 @@ async function sendRealtimeMessage(message: ChatMessage) {
           if (zipMeta.localPath) {
             localPath = zipMeta.localPath;
             size = zipMeta.size;
+            name = zipMeta.name;
+            mime = "application/zip";
           }
         } catch (err) {
           console.error("Failed to zip directory in bundle:", err);
@@ -731,7 +746,9 @@ async function sendRealtimeMessage(message: ChatMessage) {
       const modifiedItem = {
         ...item,
         localPath,
-        size
+        size,
+        name,
+        mime
       };
 
       const sha256 = sha256ForAsset(modifiedItem);
@@ -809,10 +826,9 @@ async function persistReceivedAsset(
       let finalSavePath = savePath;
       if (input.meta.isFolder) {
         try {
-          const lastSlash = savePath.lastIndexOf("/") !== -1 ? savePath.lastIndexOf("/") : savePath.lastIndexOf("\\");
-          const destDir = savePath.substring(0, lastSlash);
-          await platformAdapter.unzipFile(savePath, destDir);
-          finalSavePath = savePath.replace(/\.zip$/i, "");
+          const folderPath = savePath.replace(/\.zip$/i, "");
+          await platformAdapter.unzipFile(savePath, folderPath);
+          finalSavePath = folderPath;
         } catch (err) {
           console.error("Failed to unzip folder:", err);
           throw new Error("受信したフォルダの解凍に失敗しました。");

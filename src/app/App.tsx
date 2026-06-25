@@ -36,6 +36,14 @@ function nativeEndpointForPeer(peerHint: string): string | undefined {
   return host.includes(":") && !host.startsWith("[") ? `[${host}]:8790` : `${host}:8790`;
 }
 
+function signalingUrlForPeer(peerHint: string): string | undefined {
+  const host = peerHint.trim();
+  if (!host) {
+    return undefined;
+  }
+  return host.includes(":") && !host.startsWith("[") ? `ws://[${host}]:8787` : `ws://${host}:8787`;
+}
+
 type NativeTransferEvent = {
   messageId: string;
   transferId: string;
@@ -599,6 +607,22 @@ export function App() {
     }
   }
 
+  function handleForgetPeer() {
+    realtimeClient.disconnect();
+    updateSettings({
+      trustedPeer: undefined,
+      peerDisplayName: undefined,
+      pairedRoomId: undefined
+    });
+    setConnectionStatus("pairing");
+    setDiagnostic({
+      tone: "info",
+      title: "ペアリングをリセットしました",
+      detail: "相手PCを確認してから、もう一度Pairで接続してください。"
+    });
+    setView("pairing");
+  }
+
   function markUnreadAsRead() {
     unreadEpochRef.current += 1;
     if (useChatStore.getState().unreadCount > 0) {
@@ -700,12 +724,15 @@ export function App() {
     if (!sessionPeerId) {
       return;
     }
+    const detectedPeerUrl = lastAutoConnect?.peerHint ? signalingUrlForPeer(lastAutoConnect.peerHint) : undefined;
 
     void realtimeClient.connect({
       roomId: normalizedCode,
       localPeerId: sessionPeerId,
       displayName: settings.displayName || "You",
       mode: "join",
+      signalingUrl: detectedPeerUrl,
+      nativeEndpoint: lastAutoConnect?.peerHint ? nativeEndpointForPeer(lastAutoConnect.peerHint) : undefined,
       trustedPeer: settings.trustedPeer
     }).catch(() => undefined);
   }
@@ -829,6 +856,7 @@ export function App() {
           onClose={() => setView("main")}
           onPickSaveFolder={handlePickSaveFolder}
           onClearHistory={clearHistory}
+          onForgetPeer={handleForgetPeer}
         />
       ) : null}
 

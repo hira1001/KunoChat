@@ -1,4 +1,4 @@
-import { FolderOpen, Moon, Sun, Trash2, X, RefreshCw, Download, CheckCircle, AlertTriangle } from "lucide-react";
+import { FolderOpen, Moon, Sun, Trash2, X, RefreshCw, Download, CheckCircle, AlertTriangle, ShieldOff } from "lucide-react";
 import type { KunoSettings } from "../features/chat/messageTypes";
 import clsx from "clsx";
 import { useEffect, useState } from "react";
@@ -22,9 +22,10 @@ type SettingsScreenProps = {
   onClose: () => void;
   onPickSaveFolder: () => void;
   onClearHistory: () => void;
+  onForgetPeer: () => void;
 };
 
-export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, onClearHistory }: SettingsScreenProps) {
+export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, onClearHistory, onForgetPeer }: SettingsScreenProps) {
   const isDark = settings.theme === "dark";
   const [currentVersion, setCurrentVersion] = useState<string>("0.2.0");
   const [updateState, setUpdateState] = useState<UpdateState>({ type: "idle" });
@@ -195,6 +196,34 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
             className="kuno-focus-ring h-full shrink-0 border-l border-border px-3 text-[12px] font-semibold text-accent transition-all duration-150 hover:bg-accent-soft active:scale-95"
           >
             変更
+          </button>
+        </div>
+
+        {/* Pairing */}
+        <SectionTitle className="mt-5">ペアリング</SectionTitle>
+        <div className="mt-2 overflow-hidden rounded-card border border-border bg-surface p-3 shadow-card">
+          <div className="flex min-w-0 items-start gap-2.5">
+            <ShieldOff className="mt-0.5 h-4 w-4 shrink-0 text-muted" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13px] font-semibold text-text">
+                {settings.trustedPeer ? settings.peerDisplayName || "ペア済みデバイス" : "ペア済みデバイスなし"}
+              </div>
+              <div className="mt-0.5 break-words text-[11px] leading-4 text-faint">
+                {settings.trustedPeer
+                  ? `Fingerprint: ${settings.trustedPeer.fingerprint}`
+                  : "相手PCと接続すると、このPCに相手デバイスの鍵を保存します。"}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            id="forget-peer-btn"
+            onClick={onForgetPeer}
+            disabled={!settings.trustedPeer && !settings.peerDisplayName}
+            className="kuno-focus-ring mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-input border border-border bg-bg px-3 text-[12px] font-semibold text-text transition-all duration-150 enabled:hover:border-danger/40 enabled:hover:bg-red-50 enabled:hover:text-danger enabled:active:scale-[0.99] disabled:cursor-not-allowed disabled:text-faint dark:enabled:hover:bg-red-950/30"
+          >
+            <ShieldOff className="h-3.5 w-3.5" />
+            ペア済み相手を忘れる
           </button>
         </div>
 

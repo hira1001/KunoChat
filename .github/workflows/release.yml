@@ -87,8 +87,7 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           tagName: ${{ github.ref_name }}
           releaseDraft: true
-          uploadUpdaterJson: true
-          uploadUpdaterSignatures: true
+          includeUpdaterJson: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
       - name: Upload build evidence
@@ -96,11 +95,11 @@ jobs:
         with:
           name: KunoChat-${{ matrix.platform }}
           path: |
-            src-tauri/target/release/bundle/**/*.dmg
-            src-tauri/target/release/bundle/**/*.app
-            src-tauri/target/release/bundle/**/*.msi
-            src-tauri/target/release/bundle/**/*.exe
-            src-tauri/target/release/bundle/**/*.sig
+            src-tauri/target/**/release/bundle/**/*.dmg
+            src-tauri/target/**/release/bundle/**/*.app
+            src-tauri/target/**/release/bundle/**/*.msi
+            src-tauri/target/**/release/bundle/**/*.exe
+            src-tauri/target/**/release/bundle/**/*.sig
           if-no-files-found: error
 
   publish:

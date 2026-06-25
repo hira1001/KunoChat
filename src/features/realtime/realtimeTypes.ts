@@ -7,6 +7,13 @@ export type RealtimeConnectOptions = {
   mode: RealtimeConnectionMode;
   signalingUrl?: string;
   nativeEndpoint?: string;
+  trustedPeer?: RealtimeTrustedPeer;
+};
+
+export type RealtimeTrustedPeer = {
+  publicKey: string;
+  fingerprint: string;
+  verifiedAt: number;
 };
 
 export type RealtimeTextPayload = {
@@ -54,6 +61,8 @@ export type RealtimeControlMessage =
   | { v: 1; type: "asset-cancelled"; id: string; transferId: string; message?: string }
   | { v: 1; type: "asset-pause"; id: string; transferId: string }
   | { v: 1; type: "asset-resume"; id: string; transferId: string }
+  | { v: 1; type: "identity-hello"; senderId: string; publicKey: string; nonce: string }
+  | { v: 1; type: "identity-proof"; senderId: string; publicKey: string; signature: string }
   | { v: 1; type: "typing"; senderId: string; senderName: string; isTyping: boolean; at: number }
   | { v: 1; type: "ping"; at: number }
   | { v: 1; type: "pong"; at: number };
@@ -66,6 +75,7 @@ export type RealtimePeer = {
 export type RealtimeCallbacks = {
   onStatus: (status: "connecting" | "connected" | "reconnecting" | "offline" | "failed" | "pairing") => void;
   onPeer: (peer: RealtimePeer) => void;
+  onIdentity: (identity: { status: "new" | "trusted" | "mismatch"; publicKey: string; fingerprint: string }) => void;
   onText: (payload: RealtimeTextPayload) => void;
   onAssetStart: (asset: RealtimeAssetMeta) => void;
   onAssetProgress: (input: { id: string; transferId: string; progress: number; receivedBytes?: number }) => void;
@@ -76,6 +86,6 @@ export type RealtimeCallbacks = {
   onAssetResumed: (input: { id: string; transferId: string }) => void;
   onLocalAssetProgress: (input: { id: string; transferId: string; progress: number; receivedBytes?: number }) => void;
   onAck: (messageId: string) => void;
-  onTyping: (input: { peerId: string; senderName: string; isTyping: boolean }) => void;
+  onTyping: (input: { peerId: string; senderName: string; isTyping: boolean; at: number }) => void;
   onError: (message: string) => void;
 };

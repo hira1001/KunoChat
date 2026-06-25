@@ -40,7 +40,7 @@ npm run tauri build
 ### ビルド生成物
 ビルドが成功すると、以下のパスに実行ファイルおよびインストーラーが生成されます。
 
-* **DMG インストーラー**: `src-tauri/target/release/bundle/dmg/KunoChat_0.1.0_x64.dmg`
+* **DMG インストーラー**: `src-tauri/target/release/bundle/dmg/KunoChat_<version>_universal.dmg`
 * **RAW アプリケーション**: `src-tauri/target/release/bundle/macos/KunoChat.app`
 
 > [!WARNING]
@@ -85,8 +85,8 @@ npm run tauri build
 ### ビルド生成物
 ビルドが成功すると、以下のパスに生成されます。
 
-* **MSI インストーラー**: `src-tauri\target\release\bundle\msi\KunoChat_0.1.0_x64_en-US.msi`
-* **EXE インストーラー**: `src-tauri\target\release\bundle\nsis\KunoChat_0.1.0_x64-setup.exe`
+* **MSI インストーラー**: `src-tauri\target\release\bundle\msi\KunoChat_<version>_x64_en-US.msi`
+* **EXE インストーラー**: `src-tauri\target\release\bundle\nsis\KunoChat_<version>_x64-setup.exe`
 
 ---
 
@@ -96,10 +96,19 @@ npm run tauri build
 
 ### 自動ビルドのトリガー手順
 1. リポジトリの最新状態をGitHubにプッシュします。
-2. バージョンタグ（例: `v0.1.0`）を作成してプッシュします。
+2. `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` のバージョンを一致させ、同じバージョンタグ（例: `v0.3.0`）を作成してプッシュします。
    ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
+   npm run release:preflight -- --tag v0.3.0
+   git tag v0.3.0
+   git push origin v0.3.0
    ```
 3. GitHubリポジトリの **Actions** タブでビルドの進捗を確認できます。
-4. ビルドが成功すると、**Releases** ページにドラフト（下書き）として、Mac用の `.dmg` とWindows用の `.msi` / `.exe` が添付されたリリースが自動作成されます。内容を確認し「Publish release」をクリックするだけで公開・共有が可能です。
+4. リリースワークフローは先にドラフトを作成し、macOS/Windows双方の成果物と更新メタデータが揃った場合だけ自動公開します。どちらかが失敗した場合、ドラフトは公開されません。
+
+### 無料配布モードとOS警告
+
+通常のGitHub Actionsリリースは、Apple Developer ProgramやWindowsコード署名証明書を必須にしていません。必要な有料サービスなしで `.dmg` / `.app` / `.msi` / `.exe` を作れます。
+
+ただし、OS側の信頼表示は別問題です。Apple Developer ID署名とWindows Authenticode署名を使わない配布物では、macOS GatekeeperやWindows SmartScreenの警告が出る可能性があります。これはKunoChat側の実装では完全には消せません。警告なしに近い一般配布をしたい場合だけ、任意でOSコード署名を追加してください。
+
+Tauriアップデーター用の `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` は有料証明書ではありません。自動更新メタデータの改ざん検証に使うアプリ専用キーです。

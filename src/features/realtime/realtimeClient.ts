@@ -35,9 +35,65 @@ type SendAssetOptions = {
 
 export const MAX_ASSET_SIZE_BYTES = 10 * 1024 * 1024 * 1024;
 const MAX_TRANSFER_ID_LENGTH = 128;
+const DEVICE_PUBLIC_KEY_PATTERN = /^[a-f0-9]{64}$/i;
+const DEVICE_SIGNATURE_PATTERN = /^[a-f0-9]{128}$/i;
+const IDENTITY_NONCE_PATTERN = /^[a-f0-9]{64}$/i;
+
+type IdentityHandshake = {
+  local?: { publicKey: string; fingerprint: string };
+  localNonce?: string;
+  remote?: { senderId: string; publicKey: string; nonce: string; fingerprint: string };
+  proofSent: boolean;
+  verified: boolean;
+};
 
 function isValidTransferId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+}
+
+function createIdentityNonce(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function hexToBytes(value: string): Uint8Array {
+  const bytes = new Uint8Array(value.length / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+export async function fingerprintFromPublicKey(publicKey: string): Promise<string> {
+  if (!DEVICE_PUBLIC_KEY_PATTERN.test(publicKey)) {
+    throw new Error("Invalid device public key.");
+  }
+  const bytes = hexToBytes(publicKey);
+  const input = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", input));
+  return Array.from(digest.slice(0, 16), (byte) => byte.toString(16).padStart(2, "0")).join(":");
+}
+
+export function buildIdentityChallenge(input: {
+  roomId: string;
+  senderId: string;
+  senderPublicKey: string;
+  recipientId: string;
+  recipientPublicKey: string;
+  senderNonce: string;
+  recipientNonce: string;
+}): string {
+  return [
+    "KunoChat/auth/v1",
+    input.roomId,
+    input.senderId,
+    input.senderPublicKey,
+    input.recipientId,
+    input.recipientPublicKey,
+    input.senderNonce,
+    input.recipientNonce
+  ].join("|");
 }
 
 function isValidAssetMeta(asset: RealtimeAssetMeta): boolean {
@@ -99,6 +155,7 @@ class KunoRealtimeClient {
     string,
     { meta: RealtimeAssetMeta; source: File | RealtimeBinarySource; options: SendAssetOptions }
   >();
+  private identity?: IdentityHandshake;
 
   configure(callbacks: RealtimeCallbacks) {
     this.callbacks = callbacks;
@@ -117,6 +174,7 @@ class KunoRealtimeClient {
       ...options,
       roomId: options.roomId.replace(/\D/g, "").slice(0, 6)
     };
+    this.identity = { proofSent: false, verified: false };
     this.hasStartedOffer = false;
     this.callbacks?.onStatus("connecting");
 
@@ -172,10 +230,11 @@ class KunoRealtimeClient {
   }
 
   isReady() {
-    return this.control?.readyState === "open";
+    return this.control?.readyState === "open" && this.identity?.verified === true;
   }
 
   sendText(payload: RealtimeTextPayload) {
+    this.ensureAuthenticated();
     this.sendControl({
       v: 1,
       type: "text",
@@ -184,6 +243,7 @@ class KunoRealtimeClient {
   }
 
   sendTyping(isTyping: boolean) {
+    this.ensureAuthenticated();
     const now = Date.now();
     if (isTyping && now - this.lastTypingSent < 450) {
       return;
@@ -200,7 +260,7 @@ class KunoRealtimeClient {
   }
 
   async sendAsset(meta: RealtimeAssetMeta, source: File | RealtimeBinarySource, options: SendAssetOptions = {}) {
-    if (this.binary?.readyState !== "open") {
+    if (!this.isReady() || this.binary?.readyState !== "open") {
       closeRealtimeBinarySource(source);
       throw new Error("Binary channel is not open.");
     }
@@ -212,15 +272,33 @@ class KunoRealtimeClient {
       ? { ...meta, nativeKey: createNativeTransferKey() }
       : meta;
     this.pendingAssets.set(asset.transferId, { meta: asset, source, options });
+    void this.persistOutgoingSession(asset, source, "queued", 0);
     this.sendControl({ v: 1, type: "asset-start", asset });
   }
 
   requestTransfer(messageId: string, transferId: string, byteOffset?: number) {
+    if (!this.isReady()) {
+      this.callbacks?.onError("Peer identity has not been verified.");
+      return;
+    }
     if (!isValidTransferId(transferId) || (byteOffset !== undefined && (!Number.isSafeInteger(byteOffset) || byteOffset < 0))) {
       this.callbacks?.onError("Invalid transfer request.");
       return;
     }
     const incoming = this.incomingTransfers.get(transferId);
+    if (incoming) {
+      void platformAdapter.saveTransferSession({
+        transferId,
+        messageId,
+        direction: "incoming",
+        status: "receiving",
+        expectedSize: incoming.meta.size,
+        transferredBytes: byteOffset ?? incoming.receivedBytes,
+        sha256: incoming.meta.sha256,
+        peerFingerprint: this.identity?.remote?.fingerprint,
+        updatedAt: Date.now()
+      });
+    }
     if (incoming?.meta.nativeKey && (byteOffset ?? 0) === 0) {
       void this.requestNativeTransfer(messageId, incoming);
       return;
@@ -269,6 +347,9 @@ class KunoRealtimeClient {
   }
 
   private startPendingTransfer(transferId: string, byteOffset?: number) {
+    if (!this.isReady()) {
+      return;
+    }
     const pending = this.pendingAssets.get(transferId);
     if (!pending) {
       console.warn("[realtimeClient] request-transfer received, but no pending asset found for transferId:", transferId);
@@ -287,6 +368,9 @@ class KunoRealtimeClient {
   }
 
   private startNativePendingTransfer(transferId: string) {
+    if (!this.isReady()) {
+      return;
+    }
     const pending = this.pendingAssets.get(transferId);
     if (!pending) {
       return;
@@ -388,6 +472,7 @@ class KunoRealtimeClient {
         sha256
       });
       completed = true;
+      void platformAdapter.removeTransferSession(meta.transferId);
     } catch (error) {
       if (error instanceof TransferCancelledError) {
         this.notifyTransferCancelledOnce(outgoingTransfer);
@@ -395,6 +480,7 @@ class KunoRealtimeClient {
       }
 
       const message = error instanceof Error ? error.message : "Asset transfer failed.";
+      void this.persistOutgoingSession(meta, source, "interrupted", offset);
       this.notifyTransferFailed(meta, message);
       throw error;
     } finally {
@@ -453,6 +539,7 @@ class KunoRealtimeClient {
         sha256
       });
       completed = true;
+      void platformAdapter.removeTransferSession(meta.transferId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Native asset transfer failed.";
       if (message.startsWith("native transfer connection")) {
@@ -464,6 +551,7 @@ class KunoRealtimeClient {
       if (error instanceof TransferCancelledError || outgoingTransfer.cancelled || message === "native transfer cancelled") {
         this.notifyTransferCancelledOnce(outgoingTransfer);
       } else {
+        void this.persistOutgoingSession(meta, source, "interrupted", 0);
         this.notifyTransferFailed(meta, message);
       }
       throw error;
@@ -490,6 +578,29 @@ class KunoRealtimeClient {
         this.releasePendingAsset(transferId);
       }
     }
+  }
+
+  private persistOutgoingSession(
+    meta: RealtimeAssetMeta,
+    source: File | RealtimeBinarySource,
+    status: "queued" | "sending" | "interrupted" | "failed",
+    transferredBytes: number
+  ) {
+    if (source instanceof File || !source.nativePath) {
+      return Promise.resolve();
+    }
+    return platformAdapter.saveTransferSession({
+      transferId: meta.transferId,
+      messageId: meta.messageId,
+      direction: "outgoing",
+      status,
+      expectedSize: meta.size,
+      transferredBytes,
+      sourcePath: source.nativePath,
+      sha256: typeof meta.sha256 === "string" ? meta.sha256 : undefined,
+      peerFingerprint: this.identity?.remote?.fingerprint,
+      updatedAt: Date.now()
+    });
   }
 
   private notifyTransferFailed(meta: RealtimeAssetMeta, message: string) {
@@ -523,10 +634,13 @@ class KunoRealtimeClient {
     this.pausedTransfers.get(transferId)?.resolve();
     this.pausedTransfers.delete(transferId);
     void platformAdapter.cancelNativeSend(transferId).catch(() => undefined);
-    this.notifyTransferCancelledOnce(outgoingTransfer, message);
+    if (this.isReady()) {
+      this.notifyTransferCancelledOnce(outgoingTransfer, message);
+    }
     if (!this.outgoingTransfers.has(transferId)) {
       this.releasePendingAsset(transferId);
     }
+    void platformAdapter.removeTransferSession(transferId);
   }
 
   pauseTransfer(messageId: string, transferId: string) {
@@ -535,10 +649,12 @@ class KunoRealtimeClient {
       this.pausedTransfers.set(transferId, { resolve: () => undefined });
     }
     void platformAdapter.pauseNativeSend(transferId).catch(() => undefined);
-    try {
-      this.sendControl({ v: 1, type: "asset-pause", id: messageId, transferId });
-    } catch {
-      // Best effort
+    if (this.isReady()) {
+      try {
+        this.sendControl({ v: 1, type: "asset-pause", id: messageId, transferId });
+      } catch {
+        // Best effort
+      }
     }
   }
 
@@ -549,10 +665,12 @@ class KunoRealtimeClient {
       this.pausedTransfers.delete(transferId);
     }
     void platformAdapter.resumeNativeSend(transferId).catch(() => undefined);
-    try {
-      this.sendControl({ v: 1, type: "asset-resume", id: messageId, transferId });
-    } catch {
-      // Best effort
+    if (this.isReady()) {
+      try {
+        this.sendControl({ v: 1, type: "asset-resume", id: messageId, transferId });
+      } catch {
+        // Best effort
+      }
     }
   }
 
@@ -765,7 +883,7 @@ class KunoRealtimeClient {
       console.log("[realtimeClient] peer.connectionState changed:", peer.connectionState);
       if (peer.connectionState === "connected") {
         this.reconnectAttempts = 0;
-        this.callbacks?.onStatus("connected");
+        this.callbacks?.onStatus("connecting");
       } else if (peer.connectionState === "failed") {
         this.callbacks?.onStatus("failed");
         this.scheduleReconnect();
@@ -803,9 +921,8 @@ class KunoRealtimeClient {
 
     channel.onopen = () => {
       this.reconnectAttempts = 0;
-      this.callbacks?.onStatus("connected");
-      this.sendControl({ v: 1, type: "ping", at: Date.now() });
-      this.reannouncePendingAssets();
+      this.callbacks?.onStatus("connecting");
+      void this.beginIdentityHandshake(channel);
     };
     channel.onclose = () => {
       if (!this.manualDisconnect) {
@@ -852,6 +969,20 @@ class KunoRealtimeClient {
   }
 
   private handleControl(message: RealtimeControlMessage) {
+    if (message.type === "identity-hello") {
+      void this.handleIdentityHello(message);
+      return;
+    }
+
+    if (message.type === "identity-proof") {
+      void this.handleIdentityProof(message);
+      return;
+    }
+
+    if (!this.identity?.verified) {
+      return;
+    }
+
     if (message.type === "text") {
       this.callbacks?.onText(message);
       this.sendControl({ v: 1, type: "ack", id: message.id, receivedAt: Date.now() });
@@ -953,7 +1084,8 @@ class KunoRealtimeClient {
       this.callbacks?.onTyping({
         peerId: message.senderId,
         senderName: message.senderName,
-        isTyping: message.isTyping
+        isTyping: message.isTyping,
+        at: message.at
       });
       return;
     }
@@ -984,6 +1116,170 @@ class KunoRealtimeClient {
     }
   }
 
+  private async beginIdentityHandshake(channel: RTCDataChannel) {
+    try {
+      const identity = this.identity ?? { proofSent: false, verified: false };
+      this.identity = identity;
+      const local = await platformAdapter.getDeviceIdentity();
+      if (this.control !== channel || channel.readyState !== "open") {
+        return;
+      }
+      if (!DEVICE_PUBLIC_KEY_PATTERN.test(local.publicKey)) {
+        throw new Error("Native device identity returned an invalid public key.");
+      }
+      identity.local = local;
+      identity.localNonce ??= createIdentityNonce();
+      this.sendControl({
+        v: 1,
+        type: "identity-hello",
+        senderId: this.options?.localPeerId ?? "",
+        publicKey: local.publicKey,
+        nonce: identity.localNonce
+      });
+      await this.sendIdentityProofIfReady(identity);
+    } catch (error) {
+      this.rejectIdentity(error instanceof Error ? error.message : "Unable to load the local device identity.");
+    }
+  }
+
+  private async handleIdentityHello(message: Extract<RealtimeControlMessage, { type: "identity-hello" }>) {
+    if (!this.options || !isValidTransferId(message.senderId) || message.senderId === this.options.localPeerId) {
+      this.rejectIdentity("Received an invalid device identity hello.");
+      return;
+    }
+    if (!DEVICE_PUBLIC_KEY_PATTERN.test(message.publicKey) || !IDENTITY_NONCE_PATTERN.test(message.nonce)) {
+      this.rejectIdentity("Received malformed device identity credentials.");
+      return;
+    }
+
+    try {
+      const identity = this.identity ?? { proofSent: false, verified: false };
+      this.identity = identity;
+      const fingerprint = await fingerprintFromPublicKey(message.publicKey);
+      if (identity.remote && (identity.remote.publicKey !== message.publicKey.toLowerCase() || identity.remote.senderId !== message.senderId)) {
+        this.rejectIdentity("The remote device identity changed during authentication.", fingerprint, message.publicKey);
+        return;
+      }
+      identity.remote = {
+        senderId: message.senderId,
+        publicKey: message.publicKey.toLowerCase(),
+        nonce: message.nonce.toLowerCase(),
+        fingerprint
+      };
+      await this.sendIdentityProofIfReady(identity);
+    } catch (error) {
+      this.rejectIdentity(error instanceof Error ? error.message : "Failed to verify the remote device identity.");
+    }
+  }
+
+  private async sendIdentityProofIfReady(identity: IdentityHandshake) {
+    if (identity.proofSent || !identity.local || !identity.localNonce || !identity.remote || !this.options) {
+      return;
+    }
+
+    identity.proofSent = true;
+    try {
+      const challenge = buildIdentityChallenge({
+        roomId: this.options.roomId,
+        senderId: this.options.localPeerId,
+        senderPublicKey: identity.local.publicKey,
+        recipientId: identity.remote.senderId,
+        recipientPublicKey: identity.remote.publicKey,
+        senderNonce: identity.localNonce,
+        recipientNonce: identity.remote.nonce
+      });
+      const signature = await platformAdapter.signDeviceChallenge(challenge);
+      if (!DEVICE_SIGNATURE_PATTERN.test(signature)) {
+        throw new Error("Native device identity returned an invalid signature.");
+      }
+      this.sendControl({
+        v: 1,
+        type: "identity-proof",
+        senderId: this.options.localPeerId,
+        publicKey: identity.local.publicKey,
+        signature
+      });
+    } catch (error) {
+      identity.proofSent = false;
+      this.rejectIdentity(error instanceof Error ? error.message : "Failed to sign the device authentication challenge.");
+    }
+  }
+
+  private async handleIdentityProof(message: Extract<RealtimeControlMessage, { type: "identity-proof" }>) {
+    const identity = this.identity;
+    if (!identity?.local || !identity.localNonce || !identity.remote || !this.options) {
+      this.rejectIdentity("Received an identity proof before the handshake was ready.");
+      return;
+    }
+    if (
+      message.senderId !== identity.remote.senderId ||
+      message.publicKey.toLowerCase() !== identity.remote.publicKey ||
+      !DEVICE_SIGNATURE_PATTERN.test(message.signature)
+    ) {
+      this.rejectIdentity("Received an invalid device identity proof.", identity.remote.fingerprint, identity.remote.publicKey);
+      return;
+    }
+
+    try {
+      const challenge = buildIdentityChallenge({
+        roomId: this.options.roomId,
+        senderId: identity.remote.senderId,
+        senderPublicKey: identity.remote.publicKey,
+        recipientId: this.options.localPeerId,
+        recipientPublicKey: identity.local.publicKey,
+        senderNonce: identity.remote.nonce,
+        recipientNonce: identity.localNonce
+      });
+      const valid = await platformAdapter.verifyDeviceSignature({
+        publicKey: identity.remote.publicKey,
+        challenge,
+        signature: message.signature
+      });
+      if (!valid) {
+        this.rejectIdentity("The remote device could not prove its identity.", identity.remote.fingerprint, identity.remote.publicKey);
+        return;
+      }
+
+      const trustedPeer = this.options.trustedPeer;
+      if (
+        trustedPeer &&
+        (trustedPeer.publicKey.toLowerCase() !== identity.remote.publicKey || trustedPeer.fingerprint !== identity.remote.fingerprint)
+      ) {
+        this.rejectIdentity("The paired device identity no longer matches. Pair again only after confirming the other device.", identity.remote.fingerprint, identity.remote.publicKey);
+        return;
+      }
+
+      identity.verified = true;
+      this.callbacks?.onIdentity({
+        status: trustedPeer ? "trusted" : "new",
+        publicKey: identity.remote.publicKey,
+        fingerprint: identity.remote.fingerprint
+      });
+      this.reconnectAttempts = 0;
+      this.callbacks?.onStatus("connected");
+      this.sendControl({ v: 1, type: "ping", at: Date.now() });
+      this.reannouncePendingAssets();
+    } catch (error) {
+      this.rejectIdentity(error instanceof Error ? error.message : "Failed to validate the remote device identity.", identity.remote.fingerprint, identity.remote.publicKey);
+    }
+  }
+
+  private rejectIdentity(message: string, fingerprint?: string, publicKey?: string) {
+    if (fingerprint && publicKey) {
+      this.callbacks?.onIdentity({ status: "mismatch", publicKey, fingerprint });
+    }
+    this.manualDisconnect = true;
+    this.callbacks?.onStatus("failed");
+    this.callbacks?.onError(message);
+    this.closeTransport();
+  }
+
+  private ensureAuthenticated() {
+    if (!this.isReady()) {
+      throw new Error("Peer identity has not been verified.");
+    }
+  }
+
   private sendControl(message: RealtimeControlMessage) {
     if (this.control?.readyState !== "open") {
       throw new Error("Instant channel is not open.");
@@ -992,6 +1288,9 @@ class KunoRealtimeClient {
   }
 
   private reannouncePendingAssets() {
+    if (!this.isReady()) {
+      return;
+    }
     for (const { meta } of this.pendingAssets.values()) {
       try {
         this.sendControl({ v: 1, type: "asset-start", asset: meta });
@@ -1064,6 +1363,9 @@ class KunoRealtimeClient {
   }
 
   private handleBinaryChunk(data: ArrayBuffer) {
+    if (!this.identity?.verified) {
+      return;
+    }
     const chunk = decodeBinaryChunk(data);
     const transfer = this.incomingTransfers.get(chunk.transferId);
     if (!transfer || transfer.failed) {
@@ -1120,6 +1422,17 @@ class KunoRealtimeClient {
       transferId: transfer.meta.transferId,
       progress,
       receivedBytes: transfer.receivedBytes
+    });
+    void platformAdapter.saveTransferSession({
+      transferId: transfer.meta.transferId,
+      messageId: transfer.meta.messageId,
+      direction: "incoming",
+      status: "receiving",
+      expectedSize: transfer.meta.size,
+      transferredBytes: transfer.receivedBytes,
+      sha256: transfer.meta.sha256,
+      peerFingerprint: this.identity?.remote?.fingerprint,
+      updatedAt: Date.now()
     });
   }
 
@@ -1245,6 +1558,8 @@ class KunoRealtimeClient {
       meta: transfer.meta,
       savePath
     } as any);
+
+    void platformAdapter.removeTransferSession(transferId);
 
     this.sendControl({
       v: 1,

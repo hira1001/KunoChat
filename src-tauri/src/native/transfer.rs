@@ -1,4 +1,7 @@
-use crate::commands::fs::{prepare_part_path, validate_transfer_id};
+use crate::commands::{
+    fs::{prepare_part_path, validate_transfer_id},
+    transfer_session::{self, DurableTransferSession},
+};
 use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
     ChaCha20Poly1305, Nonce,
@@ -33,6 +36,7 @@ const FRAME_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_TRANSFER_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 const RECEIVE_TICKET_TTL: Duration = Duration::from_secs(60);
 const MAX_INCOMING_CONNECTIONS: usize = 16;
+const SESSION_PERSIST_INTERVAL: u64 = 1024 * 1024;
 const ACCEPT: u8 = 0xa1;
 static NEXT_CONNECTION_NONCE: AtomicU64 = AtomicU64::new(1);
 
@@ -90,6 +94,7 @@ pub fn start(app: &App) {
 
 #[tauri::command]
 pub async fn prepare_native_receive(
+    app: AppHandle,
     service: State<'_, NativeTransferService>,
     transfer_id: String,
     message_id: String,
@@ -108,12 +113,28 @@ pub async fn prepare_native_receive(
     }
 
     let ticket = ReceiveTicket {
-        message_id,
+        message_id: message_id.clone(),
         expected_size,
         key,
         part_path,
         prepared_at: Instant::now(),
     };
+    transfer_session::record(
+        &app,
+        DurableTransferSession {
+            transfer_id: transfer_id.clone(),
+            message_id,
+            direction: "incoming".to_string(),
+            status: "receiving".to_string(),
+            expected_size,
+            transferred_bytes: size,
+            source_path: None,
+            save_folder,
+            sha256: None,
+            peer_fingerprint: None,
+            updated_at: 0,
+        },
+    )?;
     let mut pending_receives = service
         .pending_receives
         .lock()
@@ -125,6 +146,7 @@ pub async fn prepare_native_receive(
 
 #[tauri::command]
 pub async fn cancel_native_receive(
+    app: AppHandle,
     service: State<'_, NativeTransferService>,
     transfer_id: String,
 ) -> Result<(), String> {
@@ -134,11 +156,13 @@ pub async fn cancel_native_receive(
         .lock()
         .map_err(|_| "native transfer state lock poisoned".to_string())?
         .remove(&transfer_id);
+    transfer_session::remove(&app, &transfer_id)?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn cancel_native_send(
+    app: AppHandle,
     service: State<'_, NativeTransferService>,
     transfer_id: String,
 ) -> Result<(), String> {
@@ -147,12 +171,14 @@ pub async fn cancel_native_send(
         .cancelled_sends
         .lock()
         .map_err(|_| "native transfer state lock poisoned".to_string())?
-        .insert(transfer_id);
+        .insert(transfer_id.clone());
+    transfer_session::remove(&app, &transfer_id)?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn pause_native_send(
+    app: AppHandle,
     service: State<'_, NativeTransferService>,
     transfer_id: String,
 ) -> Result<(), String> {
@@ -161,12 +187,14 @@ pub async fn pause_native_send(
         .paused_sends
         .lock()
         .map_err(|_| "native transfer state lock poisoned".to_string())?
-        .insert(transfer_id);
+        .insert(transfer_id.clone());
+    transfer_session::update_status(&app, &transfer_id, "paused")?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn resume_native_send(
+    app: AppHandle,
     service: State<'_, NativeTransferService>,
     transfer_id: String,
 ) -> Result<(), String> {
@@ -176,6 +204,7 @@ pub async fn resume_native_send(
         .lock()
         .map_err(|_| "native transfer state lock poisoned".to_string())?
         .remove(&transfer_id);
+    transfer_session::update_status(&app, &transfer_id, "sending")?;
     Ok(())
 }
 
@@ -216,8 +245,24 @@ pub async fn send_native_file(
     if remote_endpoint.is_empty() || remote_endpoint.len() > 255 {
         return Err("invalid native transfer endpoint".to_string());
     }
+    transfer_session::record(
+        &app,
+        DurableTransferSession {
+            transfer_id: transfer_id.clone(),
+            message_id: message_id.clone(),
+            direction: "outgoing".to_string(),
+            status: "sending".to_string(),
+            expected_size,
+            transferred_bytes: 0,
+            source_path: Some(path.to_string_lossy().to_string()),
+            save_folder: None,
+            sha256: None,
+            peer_fingerprint: None,
+            updated_at: 0,
+        },
+    )?;
 
-    send_file_stream(
+    let result = send_file_stream(
         &app,
         &transfer_id,
         &message_id,
@@ -227,7 +272,11 @@ pub async fn send_native_file(
         key,
         service.inner(),
     )
-    .await
+    .await;
+    if result.is_err() {
+        let _ = transfer_session::update_status(&app, &transfer_id, "interrupted");
+    }
+    result
 }
 
 async fn run_listener(app: AppHandle, service: NativeTransferService) -> Result<(), String> {
@@ -286,6 +335,7 @@ async fn send_file_stream(
     let mut sequence = 0_u64;
     let mut sent = 0_u64;
     let mut last_reported = 0_u64;
+    let mut last_persisted = 0_u64;
 
     loop {
         if take_cancelled_send(service, transfer_id)? {
@@ -318,6 +368,11 @@ async fn send_file_stream(
         sent = sent
             .checked_add(bytes_read as u64)
             .ok_or_else(|| "native transfer size overflow".to_string())?;
+        if sent == expected_size || sent.saturating_sub(last_persisted) >= SESSION_PERSIST_INTERVAL
+        {
+            last_persisted = sent;
+            transfer_session::update_progress(app, transfer_id, sent, "sending")?;
+        }
         if sent == expected_size || sent.saturating_sub(last_reported) >= 256 * 1024 {
             last_reported = sent;
             emit_event(
@@ -339,6 +394,7 @@ async fn send_file_stream(
     }
     write_frame(&mut stream, &[]).await?;
     stream.flush().await.map_err(|error| error.to_string())?;
+    transfer_session::remove(app, transfer_id)?;
     emit_event(
         app,
         NativeTransferEvent {
@@ -377,6 +433,15 @@ async fn receive_file_stream(
     let result =
         receive_file_body(app, &transfer_id, nonce_prefix, ticket.clone(), &mut stream).await;
     if let Err(error) = &result {
+        let received = std::fs::metadata(&ticket.part_path)
+            .map(|metadata| metadata.len().min(ticket.expected_size))
+            .unwrap_or_default();
+        let status = if error.contains("authentication") || error.contains("exceeds") {
+            "failed"
+        } else {
+            "interrupted"
+        };
+        let _ = transfer_session::update_progress(app, &transfer_id, received, status);
         emit_event(
             app,
             NativeTransferEvent {
@@ -410,6 +475,7 @@ async fn receive_file_body(
     let mut sequence = 0_u64;
     let mut received = 0_u64;
     let mut last_reported = 0_u64;
+    let mut last_persisted = 0_u64;
 
     loop {
         let encrypted = read_frame(stream).await?;
@@ -439,6 +505,12 @@ async fn receive_file_body(
             .checked_add(1)
             .ok_or_else(|| "native transfer sequence overflow".to_string())?;
         received = next;
+        if received == ticket.expected_size
+            || received.saturating_sub(last_persisted) >= SESSION_PERSIST_INTERVAL
+        {
+            last_persisted = received;
+            transfer_session::update_progress(app, transfer_id, received, "receiving")?;
+        }
         if received == ticket.expected_size || received.saturating_sub(last_reported) >= 256 * 1024
         {
             last_reported = received;
@@ -465,6 +537,7 @@ async fn receive_file_body(
     if received != ticket.expected_size {
         return Err("native transfer ended before the declared size".to_string());
     }
+    transfer_session::remove(app, transfer_id)?;
     emit_event(
         app,
         NativeTransferEvent {

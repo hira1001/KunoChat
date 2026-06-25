@@ -36,5 +36,6 @@ Measure these values with two installed release builds, recording p50 and p95 fo
 ## Current Implementation Constraints
 
 - The sender and receiver communicate directly only when WebRTC establishes a viable route. TURN infrastructure is still required to guarantee remote NAT traversal.
-- Durable sender-side byte-range resume across a full application restart is not complete yet. Same-process reconnect re-announces pending assets; a crash-safe resume protocol remains a release blocker for large-file reliability.
+- Path-backed outgoing transfers and native receiver part files have crash-safe session records. After both apps reconnect and re-verify device identity, KunoChat re-announces an interrupted outgoing asset and asks for the retained incoming byte offset. The resumed byte stream uses the WebRTC binary fallback when a direct native stream cannot continue from a nonzero offset.
+- Browser-only `File` objects cannot survive a desktop-app restart; installed-app path-backed sources are the supported durable resume path.
 - Benchmark conclusions must be based on the matrix above, not a single local-machine run.

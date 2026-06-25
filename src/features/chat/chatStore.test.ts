@@ -23,8 +23,10 @@ function resetStore() {
     draftText: "",
     attachments: [],
     transferStates: {},
+    unreadCount: 0,
     isDraggingOver: false,
     peerTyping: false,
+    peerTypingAt: 0,
     settings: {
       ...useChatStore.getState().settings,
       displayName: "Tester",
@@ -55,9 +57,26 @@ describe("chatStore", () => {
     expect(useChatStore.getState().connectionStatus).toBe("connected");
   });
 
+  test("caps unread messages at 99 and clears them when opened", () => {
+    for (let index = 0; index < 101; index += 1) {
+      useChatStore.getState().incrementUnread();
+    }
+    expect(useChatStore.getState().unreadCount).toBe(99);
+
+    useChatStore.getState().clearUnread();
+    expect(useChatStore.getState().unreadCount).toBe(0);
+  });
+
   test("updates typing state", () => {
     useChatStore.getState().setPeerTyping(true);
     expect(useChatStore.getState().peerTyping).toBe(true);
+  });
+
+  test("ignores an out-of-order typing event", () => {
+    useChatStore.getState().setPeerTyping(false, 200);
+    useChatStore.getState().setPeerTyping(true, 100);
+    expect(useChatStore.getState().peerTyping).toBe(false);
+    expect(useChatStore.getState().peerTypingAt).toBe(200);
   });
 
   test("updates draft text", () => {

@@ -1,11 +1,11 @@
 # Test Plan
 
-KunoChat uses automated unit/integration tests plus manual two-device system tests. The current automated suite covers 179 cases: 145 Vitest cases and 34 Cargo cases.
+KunoChat uses automated unit/integration tests plus manual two-device system tests. The current automated suite covers 215 cases: 163 Vitest cases and 52 Cargo cases.
 
 ## Automated Evidence
 
-- `npm test`: 145 passed.
-- `cargo test`: 34 passed.
+- `npm test`: 163 passed.
+- `cargo test`: 52 passed.
 - `npm run typecheck`: passed.
 - `npm run build`: passed.
 
@@ -143,6 +143,10 @@ KunoChat uses automated unit/integration tests plus manual two-device system tes
 | TC-121 | Rust unit | Tailscale | New candidate | emitted immediately |
 | TC-122 | Rust unit | Tailscale | Repeated candidate | suppressed inside reemit window |
 | TC-123 | Rust unit | Tailscale | Repeated candidate after window | reemitted |
+| TC-124 | Unit | Device identity | Signed challenge shape | room, both peer ids, keys, and nonces are bound |
+| TC-125 | Rust unit | Device identity | Invalid key/signature input | rejected before verification |
+| TC-126 | Rust unit | Transfer recovery | Session progress persistence | byte count and status survive storage reload |
+| TC-127 | Rust unit | Transfer recovery | Corrupt session data | quarantined without blocking app startup |
 
 ## Manual System Cases
 

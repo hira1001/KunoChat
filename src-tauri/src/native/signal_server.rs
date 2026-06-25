@@ -6,18 +6,30 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
+    time::{Duration, Instant},
 };
 use tauri::async_runtime;
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::mpsc::{channel, Sender},
+    sync::{
+        mpsc::{channel, Sender},
+        Semaphore,
+    },
+    time::timeout,
 };
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::{
+    accept_async_with_config,
+    tungstenite::{protocol::WebSocketConfig, Message},
+};
 
 type Rooms = Arc<Mutex<HashMap<String, HashMap<String, Peer>>>>;
 static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
 const MAX_SIGNAL_MESSAGE_BYTES: usize = 64 * 1024;
 const SIGNAL_QUEUE_CAPACITY: usize = 64;
+const MAX_SIGNAL_CONNECTIONS: usize = 64;
+const SIGNAL_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(6);
+const SIGNAL_RATE_WINDOW: Duration = Duration::from_secs(10);
+const MAX_SIGNAL_MESSAGES_PER_WINDOW: u32 = 120;
 
 #[derive(Clone)]
 struct Peer {
@@ -40,12 +52,17 @@ async fn run_server(port: u16) -> Result<(), String> {
         .await
         .map_err(|error| format!("cannot bind signaling server on port {port}: {error}"))?;
     let rooms: Rooms = Arc::new(Mutex::new(HashMap::new()));
+    let connections = Arc::new(Semaphore::new(MAX_SIGNAL_CONNECTIONS));
     eprintln!("KunoChat embedded signaling server listening on ws://0.0.0.0:{port}");
 
     loop {
         let (stream, _) = listener.accept().await.map_err(|error| error.to_string())?;
+        let Ok(permit) = connections.clone().try_acquire_owned() else {
+            continue;
+        };
         let rooms = rooms.clone();
         async_runtime::spawn(async move {
+            let _permit = permit;
             if let Err(error) = handle_connection(stream, rooms).await {
                 eprintln!("KunoChat signaling connection ended: {error}");
             }
@@ -54,9 +71,16 @@ async fn run_server(port: u16) -> Result<(), String> {
 }
 
 async fn handle_connection(stream: TcpStream, rooms: Rooms) -> Result<(), String> {
-    let websocket = accept_async(stream)
-        .await
-        .map_err(|error| error.to_string())?;
+    let websocket_config = WebSocketConfig::default()
+        .max_message_size(Some(MAX_SIGNAL_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_SIGNAL_MESSAGE_BYTES));
+    let websocket = timeout(
+        SIGNAL_HANDSHAKE_TIMEOUT,
+        accept_async_with_config(stream, Some(websocket_config)),
+    )
+    .await
+    .map_err(|_| "signaling WebSocket handshake timed out".to_string())?
+    .map_err(|error| error.to_string())?;
     let (mut write, mut read) = websocket.split();
     let (tx, mut rx) = channel::<Message>(SIGNAL_QUEUE_CAPACITY);
     let writer = async_runtime::spawn(async move {
@@ -70,8 +94,21 @@ async fn handle_connection(stream: TcpStream, rooms: Rooms) -> Result<(), String
     let mut current_room = String::new();
     let mut current_peer = String::new();
     let connection_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed);
+    let mut rate_window_started = Instant::now();
+    let mut messages_in_window = 0_u32;
 
     while let Some(raw) = read.next().await {
+        if exceeds_rate_limit(
+            &mut rate_window_started,
+            &mut messages_in_window,
+            Instant::now(),
+        ) {
+            send_json(
+                &tx,
+                json!({ "type": "error", "message": "signaling rate limit exceeded." }),
+            );
+            return Err("signaling rate limit exceeded".to_string());
+        }
         let raw = raw.map_err(|error| error.to_string())?;
         if raw.is_close() {
             break;
@@ -191,6 +228,19 @@ async fn handle_connection(stream: TcpStream, rooms: Rooms) -> Result<(), String
     Ok(())
 }
 
+fn exceeds_rate_limit(
+    window_started: &mut Instant,
+    messages_in_window: &mut u32,
+    now: Instant,
+) -> bool {
+    if now.duration_since(*window_started) >= SIGNAL_RATE_WINDOW {
+        *window_started = now;
+        *messages_in_window = 0;
+    }
+    *messages_in_window = messages_in_window.saturating_add(1);
+    *messages_in_window > MAX_SIGNAL_MESSAGES_PER_WINDOW
+}
+
 fn join_room(rooms: &Rooms, room_id: &str, peer: Peer) -> Result<Vec<Value>, String> {
     let mut rooms = rooms.lock().map_err(|_| "room lock poisoned".to_string())?;
     let room = rooms
@@ -297,6 +347,19 @@ mod tests {
             },
             rx,
         )
+    }
+
+    #[test]
+    fn signal_rate_limit_resets_after_its_window() {
+        let now = Instant::now();
+        let mut started = now;
+        let mut count = MAX_SIGNAL_MESSAGES_PER_WINDOW;
+        assert!(exceeds_rate_limit(&mut started, &mut count, now));
+        assert!(!exceeds_rate_limit(
+            &mut started,
+            &mut count,
+            now + SIGNAL_RATE_WINDOW
+        ));
     }
 
     #[test]

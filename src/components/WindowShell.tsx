@@ -21,7 +21,7 @@ export function WindowShell({
 }: WindowShellProps) {
   if (mode === "mini") {
     return (
-      <main className="grid min-h-screen w-full max-w-full place-items-start justify-end overflow-hidden bg-transparent p-2 sm:p-6">
+      <main className="flex h-full min-h-0 w-full max-w-full items-center justify-center overflow-hidden bg-transparent p-1">
         <MiniPill
           status={connectionState}
           unreadCount={unreadCount}
@@ -33,8 +33,8 @@ export function WindowShell({
   }
 
   return (
-    <main className="grid min-h-screen w-full max-w-full place-items-stretch overflow-hidden bg-bg p-0">
-      <section className="kuno-shell-expand relative flex h-screen w-full min-w-0 max-w-full flex-col overflow-hidden bg-bg text-text">
+    <main className="grid h-full min-h-0 w-full max-w-full place-items-stretch overflow-hidden bg-bg p-0">
+      <section className="kuno-shell-expand relative flex h-full min-h-0 w-full min-w-0 max-w-full flex-col overflow-hidden bg-bg text-text">
         {children}
       </section>
     </main>

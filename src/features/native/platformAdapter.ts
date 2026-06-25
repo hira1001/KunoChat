@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { open as openNativeFile, SeekMode, type FileHandle } from "@tauri-apps/plugin-fs";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export type PlatformName = "windows" | "macos" | "linux" | "unknown";
 
@@ -56,6 +57,25 @@ export type NativeSendInput = {
   remoteEndpoint: string;
   expectedSize: number;
   key: string;
+};
+
+export type DeviceIdentity = {
+  publicKey: string;
+  fingerprint: string;
+};
+
+export type DurableTransferSession = {
+  transferId: string;
+  messageId: string;
+  direction: "incoming" | "outgoing";
+  status: "queued" | "sending" | "receiving" | "paused" | "interrupted" | "failed";
+  expectedSize: number;
+  transferredBytes: number;
+  sourcePath?: string;
+  saveFolder?: string;
+  sha256?: string;
+  peerFingerprint?: string;
+  updatedAt: number;
 };
 
 type PartFilePreparation = {
@@ -140,6 +160,36 @@ export const platformAdapter = {
   async setAlwaysOnTop(enabled: boolean): Promise<void> {
     if (hasTauri) {
       await invoke("set_always_on_top", { enabled });
+    }
+  },
+
+  async setUnreadCount(count: number): Promise<void> {
+    if (hasTauri) {
+      await invoke("set_unread_count", { count: Math.max(0, Math.min(99, Math.trunc(count))) });
+    }
+  },
+
+  async needsUnreadAttention(): Promise<boolean> {
+    if (!hasTauri) {
+      return !document.hasFocus();
+    }
+
+    try {
+      const appWindow = getCurrentWindow();
+      const [focused, minimized, visible] = await Promise.all([
+        appWindow.isFocused(),
+        appWindow.isMinimized(),
+        appWindow.isVisible()
+      ]);
+      return !focused || minimized || !visible;
+    } catch {
+      return !document.hasFocus();
+    }
+  },
+
+  async setWindowMode(mode: "main" | "mini"): Promise<void> {
+    if (hasTauri) {
+      await invoke("set_window_mode", { mode });
     }
   },
 
@@ -353,6 +403,48 @@ export const platformAdapter = {
       throw new Error("Native transfer is only available in Tauri.");
     }
     await invoke<void>("send_native_file", input);
+  },
+
+  async getDeviceIdentity(): Promise<DeviceIdentity> {
+    if (!hasTauri) {
+      throw new Error("Device identity is only available in the installed desktop app.");
+    }
+    return invoke<DeviceIdentity>("get_device_identity");
+  },
+
+  async signDeviceChallenge(challenge: string): Promise<string> {
+    if (!hasTauri) {
+      throw new Error("Device identity is only available in the installed desktop app.");
+    }
+    return invoke<string>("sign_device_challenge", { challenge });
+  },
+
+  async verifyDeviceSignature(input: { publicKey: string; challenge: string; signature: string }): Promise<boolean> {
+    if (!hasTauri) {
+      return false;
+    }
+    return invoke<boolean>("verify_device_signature", input);
+  },
+
+  async saveTransferSession(session: DurableTransferSession): Promise<void> {
+    if (!hasTauri) {
+      return;
+    }
+    await invoke<void>("save_transfer_session", { session });
+  },
+
+  async listRecoverableTransferSessions(): Promise<DurableTransferSession[]> {
+    if (!hasTauri) {
+      return [];
+    }
+    return invoke<DurableTransferSession[]>("list_recoverable_transfer_sessions");
+  },
+
+  async removeTransferSession(transferId: string): Promise<void> {
+    if (!hasTauri) {
+      return;
+    }
+    await invoke<void>("remove_transfer_session", { transferId });
   },
 
   async finalizePartFile(transferId: string, filename: string, expectedSize: number, sha256?: string): Promise<string> {

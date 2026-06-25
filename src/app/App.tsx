@@ -11,13 +11,14 @@ import { HistoryTab } from "../components/HistoryTab";
 import { useChatStore } from "../features/chat/chatStore";
 import { runtimeConfig } from "../features/config/runtimeConfig";
 import type { ChatMessage, DraftAttachment } from "../features/chat/messageTypes";
-import { platformAdapter } from "../features/native/platformAdapter";
+import { platformAdapter, type DurableTransferSession } from "../features/native/platformAdapter";
 import { realtimeClient } from "../features/realtime/realtimeClient";
 import type { RealtimeAssetMeta, RealtimeBinarySource } from "../features/realtime/realtimeTypes";
 import { parseClipboardItems } from "../features/sendables/clipboardParser";
 import { parseDroppedFiles } from "../features/sendables/dropParser";
 import { sha256ArrayBuffer, sha256ForAsset } from "../features/transfer/hash";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 type AutoConnectPayload = {
   signalingUrl: string;
@@ -58,11 +59,14 @@ export function App() {
     messages,
     draftText,
     attachments,
+    unreadCount,
     isDraggingOver,
     peerTyping,
     settings,
     setView,
     setConnectionStatus,
+    incrementUnread,
+    clearUnread,
     setPeerTyping,
     markMessageStatus,
     markInterruptedTransfers,
@@ -87,7 +91,14 @@ export function App() {
   const sessionPeerIdRef = useRef<string>();
   const hostedRoomRef = useRef<string>();
   const autoConnectRef = useRef<string>();
+  const recoveredTransfersRef = useRef(false);
+  const recoveryLoadedRef = useRef(false);
+  const recoverySessionsRef = useRef<DurableTransferSession[]>([]);
+  const recoveryRequestsRef = useRef(new Set<string>());
   const typingStopTimerRef = useRef<number>();
+  const settingsRef = useRef(settings);
+  const windowFocusedRef = useRef(typeof document === "undefined" ? true : document.hasFocus());
+  const unreadEpochRef = useRef(0);
   const [diagnostic, setDiagnostic] = useState<ConnectionDiagnostic>();
   const [lastAutoConnect, setLastAutoConnect] = useState<AutoConnectPayload>();
   if (!sessionPeerIdRef.current) {
@@ -102,27 +113,96 @@ export function App() {
     platformAdapter.setSaveFolder(settings.saveFolder);
   }, [settings.saveFolder]);
 
-  // OS dark mode sync
   useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const apply = (dark: boolean) => {
-      document.body.classList.toggle("dark", dark);
-      document.documentElement.classList.toggle("dark", dark);
-      document.documentElement.classList.toggle("light", !dark);
+    settingsRef.current = settings;
+  }, [settings]);
+
+  useEffect(() => {
+    void platformAdapter.setAlwaysOnTop(settings.alwaysOnTop).catch(() => undefined);
+  }, [settings.alwaysOnTop]);
+
+  useEffect(() => {
+    void platformAdapter.setUnreadCount(unreadCount).catch(() => undefined);
+  }, [unreadCount]);
+
+  useEffect(() => {
+    void platformAdapter.setWindowMode(currentView === "mini" ? "mini" : "main").catch(() => undefined);
+  }, [currentView]);
+
+  useEffect(() => {
+    const dark = settings.theme === "dark";
+    document.body.classList.toggle("dark", dark);
+    document.documentElement.classList.toggle("dark", dark);
+    document.documentElement.classList.toggle("light", !dark);
+  }, [settings.theme]);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      const handleFocus = () => {
+        windowFocusedRef.current = true;
+        markUnreadAsRead();
+      };
+      const handleBlur = () => {
+        windowFocusedRef.current = false;
+      };
+      window.addEventListener("focus", handleFocus);
+      window.addEventListener("blur", handleBlur);
+      return () => {
+        window.removeEventListener("focus", handleFocus);
+        window.removeEventListener("blur", handleBlur);
+      };
+    }
+
+    let disposed = false;
+    let unlistenFocus: (() => void) | undefined;
+    void getCurrentWindow()
+      .isFocused()
+      .then((focused) => {
+        if (!disposed) {
+          windowFocusedRef.current = focused;
+        }
+      })
+      .catch(() => undefined);
+    void getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        windowFocusedRef.current = focused;
+        if (focused) {
+          markUnreadAsRead();
+        }
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        unlistenFocus = unlisten;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      disposed = true;
+      unlistenFocus?.();
     };
-    apply(mq.matches);
-    const handler = (event: MediaQueryListEvent) => apply(event.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
   }, []);
+
+  useEffect(() => {
+    if (currentView !== "mini" && windowFocusedRef.current) {
+      markUnreadAsRead();
+    }
+  }, [currentView]);
 
   useEffect(() => {
     realtimeClient.configure({
       onStatus: (status) => {
         setConnectionStatus(status);
+        if (status !== "connected") {
+          window.clearTimeout(typingStopTimerRef.current);
+          setPeerTyping(false);
+        }
         if (status === "connected") {
           setDiagnostic(undefined);
           setView("main");
+          void resumeRecoveredTransfers();
         } else if (status === "reconnecting") {
           markInterruptedTransfers();
           setDiagnostic({
@@ -140,8 +220,35 @@ export function App() {
         }
       },
       onPeer: (peer) => updateSettings({ peerDisplayName: peer.displayName }),
-      onText: receivePeerText,
+      onIdentity: (identity) => {
+        if (identity.status === "mismatch") {
+          setDiagnostic({
+            tone: "danger",
+            title: "相手PCの確認に失敗しました",
+            detail: "以前ペアリングしたデバイスと一致しません。相手PCを確認してから再ペアリングしてください。"
+          });
+          return;
+        }
+        updateSettings({
+          trustedPeer: {
+            publicKey: identity.publicKey,
+            fingerprint: identity.fingerprint,
+            verifiedAt: Date.now()
+          }
+        });
+      },
+      onText: (input) => {
+        if (useChatStore.getState().messages.some((message) => message.id === input.id)) {
+          return;
+        }
+        receivePeerText(input);
+        void notifyIncoming(`${input.senderName}`, input.text);
+      },
       onAssetStart: (asset) => {
+        const isNewMessage = !useChatStore.getState().messages.some((message) => message.id === asset.messageId);
+        const shouldResume = recoverySessionsRef.current.some(
+          (session) => session.direction === "incoming" && session.transferId === asset.transferId
+        );
         receivePeerAsset({
           id: asset.messageId,
           transferId: asset.transferId,
@@ -156,6 +263,17 @@ export function App() {
           thumbnail: asset.thumbnail,
           isFolder: asset.isFolder
         });
+        if (isNewMessage) {
+          void notifyIncoming(`${asset.senderName} sent a file`, asset.name);
+        }
+        if (shouldResume && !recoveryRequestsRef.current.has(asset.transferId)) {
+          recoveryRequestsRef.current.add(asset.transferId);
+          window.setTimeout(() => {
+            const state = useChatStore.getState();
+            state.markMessageStatus(asset.messageId, "receiving");
+            realtimeClient.requestTransfer(asset.messageId, asset.transferId);
+          }, 0);
+        }
       },
       onAssetProgress: ({ id, transferId, progress, receivedBytes }) =>
         updateTransferProgress({ messageId: id, transferId, progress, receivedBytes }),
@@ -168,10 +286,12 @@ export function App() {
             savePath,
             sha256: meta?.sha256
           });
-          void platformAdapter.showNotification({
-            title: "KunoChat",
-            body: `${meta?.name.replace(/\.zip$/i, "")} を保存しました`
-          });
+          if (settingsRef.current.notifications) {
+            void platformAdapter.showNotification({
+              title: "KunoChat",
+              body: `${meta?.name.replace(/\.zip$/i, "")} を保存しました`
+            }).catch(() => undefined);
+          }
         } else if (blob && meta) {
           void persistReceivedAsset({ id, transferId, objectUrl, blob, meta }, completeTransfer, failTransfer);
         } else {
@@ -189,11 +309,11 @@ export function App() {
       onLocalAssetProgress: ({ id, transferId, progress, receivedBytes }) =>
         updateTransferProgress({ messageId: id, transferId, progress, receivedBytes }),
       onAck: (messageId) => markMessageStatus(messageId, "received"),
-      onTyping: ({ senderName, isTyping }) => {
+      onTyping: ({ senderName, isTyping, at }) => {
         updateSettings({ peerDisplayName: senderName });
-        setPeerTyping(isTyping);
+        setPeerTyping(isTyping, at);
+        window.clearTimeout(typingStopTimerRef.current);
         if (isTyping) {
-          window.clearTimeout(typingStopTimerRef.current);
           typingStopTimerRef.current = window.setTimeout(() => setPeerTyping(false), 1800);
         }
       },
@@ -215,6 +335,36 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    let disposed = false;
+    void platformAdapter
+      .listRecoverableTransferSessions()
+      .then((sessions) => {
+        if (disposed) {
+          return;
+        }
+        recoverySessionsRef.current = sessions;
+        recoveryLoadedRef.current = true;
+        const state = useChatStore.getState();
+        for (const session of sessions) {
+          const progress = session.expectedSize === 0 ? 100 : Math.min(100, Math.round((session.transferredBytes / session.expectedSize) * 100));
+          state.updateTransferProgress({
+            messageId: session.messageId,
+            transferId: session.transferId,
+            progress,
+            receivedBytes: session.transferredBytes
+          });
+        }
+        void resumeRecoveredTransfers();
+      })
+      .catch(() => {
+        recoveryLoadedRef.current = true;
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (currentView !== "pairing" || connectionStatus === "connected" || hostedRoomRef.current === pairingCode) {
       return;
     }
@@ -229,7 +379,8 @@ export function App() {
       roomId: pairingCode,
       localPeerId: sessionPeerId,
       displayName: settings.displayName || "You",
-      mode: "host"
+      mode: "host",
+      trustedPeer: settings.trustedPeer
     }).catch(() => undefined);
   }, [currentView, connectionStatus, pairingCode, settings.displayName, settings.localPeerId]);
 
@@ -282,7 +433,8 @@ export function App() {
           displayName: state.settings.displayName || "You",
           mode: event.payload.mode,
           signalingUrl: event.payload.signalingUrl,
-          nativeEndpoint: nativeEndpointForPeer(event.payload.peerHint)
+          nativeEndpoint: nativeEndpointForPeer(event.payload.peerHint),
+          trustedPeer: state.settings.trustedPeer
         }).catch(() => undefined);
       }),
       listen<NativeTransferEvent>("kuno:native-transfer", (event) => {
@@ -447,6 +599,92 @@ export function App() {
     }
   }
 
+  function markUnreadAsRead() {
+    unreadEpochRef.current += 1;
+    if (useChatStore.getState().unreadCount > 0) {
+      clearUnread();
+    }
+  }
+
+  async function markUnreadIfAttentionIsNeeded(): Promise<boolean> {
+    const epoch = unreadEpochRef.current;
+    const miniMode = useChatStore.getState().currentView === "mini";
+    const needsAttention = miniMode || await platformAdapter.needsUnreadAttention();
+    if (!needsAttention || epoch !== unreadEpochRef.current) {
+      return false;
+    }
+    incrementUnread();
+    return true;
+  }
+
+  async function notifyIncoming(title: string, body: string) {
+    if (!await markUnreadIfAttentionIsNeeded() || !settingsRef.current.notifications) {
+      return;
+    }
+    await platformAdapter.showNotification({ title, body }).catch(() => undefined);
+  }
+
+  function handleOpenMain() {
+    markUnreadAsRead();
+    setView("main");
+  }
+
+  async function resumeRecoveredTransfers() {
+    if (!recoveryLoadedRef.current || recoveredTransfersRef.current || !realtimeClient.isReady()) {
+      return;
+    }
+    recoveredTransfersRef.current = true;
+    const state = useChatStore.getState();
+    for (const session of recoverySessionsRef.current) {
+      if (session.direction !== "outgoing" || session.status === "failed") {
+        continue;
+      }
+      if (session.peerFingerprint && state.settings.trustedPeer?.fingerprint !== session.peerFingerprint) {
+        state.failTransfer({
+          messageId: session.messageId,
+          transferId: session.transferId,
+          message: "以前の転送先PCと一致しないため、再開を停止しました。"
+        });
+        continue;
+      }
+
+      const message = state.messages.find((candidate) => candidate.id === session.messageId && candidate.sender === "me");
+      const asset = message?.asset?.transferId === session.transferId
+        ? message.asset
+        : message?.bundle?.items.find((candidate) => candidate.transferId === session.transferId);
+      const sourcePath = session.sourcePath ?? asset?.localPath;
+      if (!message || !asset || !sourcePath || asset.isFolder) {
+        state.failTransfer({
+          messageId: session.messageId,
+          transferId: session.transferId,
+          message: "再開に必要なローカルファイルを開けません。ファイルを選び直して再送してください。"
+        });
+        continue;
+      }
+
+      try {
+        const resumedAsset = {
+          ...asset,
+          localPath: sourcePath,
+          size: session.expectedSize,
+          sha256: session.sha256 ?? asset.sha256
+        };
+        await realtimeClient.sendAsset(
+          toRealtimeAssetMeta(message, resumedAsset),
+          await platformAdapter.createNativeBinarySource(sourcePath, session.expectedSize),
+          { sha256: sha256ForAsset(resumedAsset) }
+        );
+        state.markMessageStatus(session.messageId, "queued");
+      } catch (error) {
+        state.failTransfer({
+          messageId: session.messageId,
+          transferId: session.transferId,
+          message: error instanceof Error ? error.message : "転送の再開に失敗しました。"
+        });
+      }
+    }
+  }
+
   function handleConnect(friendCode: string) {
     const normalizedCode = friendCode.replace(/\D/g, "");
     if (normalizedCode.length < 6) {
@@ -467,7 +705,8 @@ export function App() {
       roomId: normalizedCode,
       localPeerId: sessionPeerId,
       displayName: settings.displayName || "You",
-      mode: "join"
+      mode: "join",
+      trustedPeer: settings.trustedPeer
     }).catch(() => undefined);
   }
 
@@ -485,7 +724,8 @@ export function App() {
       displayName: settings.displayName || "You",
       mode: payload.mode,
       signalingUrl: payload.signalingUrl,
-      nativeEndpoint: nativeEndpointForPeer(payload.peerHint)
+      nativeEndpoint: nativeEndpointForPeer(payload.peerHint),
+      trustedPeer: settings.trustedPeer
     }).catch(() => undefined);
   }
 
@@ -506,6 +746,18 @@ export function App() {
       }
     } catch {
       // Typing indicators are best-effort and should never block the composer.
+    }
+  }
+
+  function handleComposerBlur() {
+    if (useChatStore.getState().connectionStatus !== "connected") {
+      return;
+    }
+    window.clearTimeout(typingStopTimerRef.current);
+    try {
+      realtimeClient.sendTyping(false);
+    } catch {
+      // Typing state is opportunistic and must not affect the editor.
     }
   }
 
@@ -553,9 +805,9 @@ export function App() {
     <WindowShell
       mode={currentView}
       connectionState={connectionStatus}
-      unreadCount={0}
+      unreadCount={unreadCount}
       activeTransferCount={messages.filter((message) => message.status === "sending").length}
-      onOpenMain={() => setView("main")}
+      onOpenMain={handleOpenMain}
     >
       {currentView === "pairing" ? (
         <PairingScreen
@@ -597,6 +849,8 @@ export function App() {
             peerName={peerName}
             onSettings={() => setView("settings")}
             onHistory={() => setView("history")}
+            onMini={() => setView("mini")}
+            onPair={() => setView("pairing")}
           />
           <ConnectionBanner
             diagnostic={diagnostic}
@@ -614,6 +868,7 @@ export function App() {
             onPauseMessage={handlePauseMessage}
             onResumeMessage={handleResumeMessage}
             onDownload={requestDownload}
+            onPair={() => setView("pairing")}
           />
           <DropOverlay visible={isDraggingOver} />
           <AttachmentPreview attachments={attachments} onRemove={removeAttachment} />
@@ -624,6 +879,7 @@ export function App() {
             onChange={handleDraftChange}
             onSend={() => void handleSendDraft()}
             onPickFiles={handlePickFiles}
+            onBlur={handleComposerBlur}
           />
         </div>
       ) : null}
@@ -757,6 +1013,28 @@ async function sendRealtimeMessage(message: ChatMessage) {
   throw new Error("This message does not contain a readable payload.");
 }
 
+function toRealtimeAssetMeta(
+  message: ChatMessage,
+  asset: NonNullable<ChatMessage["asset"]> | NonNullable<ChatMessage["bundle"]>["items"][number]
+): RealtimeAssetMeta {
+  return {
+    id: asset.id,
+    messageId: message.id,
+    transferId: asset.transferId,
+    senderId: message.senderId,
+    senderName: message.senderName,
+    createdAt: message.createdAt,
+    kind: asset.kind,
+    name: asset.name,
+    size: asset.size,
+    mime: asset.mime,
+    sha256: asset.sha256,
+    caption: message.bundle?.caption,
+    thumbnail: asset.thumbnail,
+    isFolder: asset.isFolder
+  };
+}
+
 async function createBinarySource(asset: NonNullable<ChatMessage["asset"]> | NonNullable<ChatMessage["bundle"]>["items"][number]): Promise<File | RealtimeBinarySource> {
   if (asset.file) {
     return asset.file;
@@ -838,43 +1116,34 @@ function ConnectionBanner({
   onPair: () => void;
   onRetry: () => void;
 }) {
-  if (!diagnostic && status === "connected") {
+  if (!diagnostic) {
     return null;
   }
 
-  const activeDiagnostic =
-    diagnostic ??
-    (status === "pairing"
-      ? {
-          tone: "info" as const,
-          title: "接続待ち",
-          detail: "同じWi-Fi/LANで相手のKunoChatを開くと自動接続を試みます。"
-        }
-      : undefined);
+  const activeDiagnostic = diagnostic;
 
   if (!activeDiagnostic) {
     return null;
   }
-
   const toneClass =
     activeDiagnostic.tone === "danger"
-      ? "border-red-200 bg-red-50 text-red-700"
+      ? "border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-950/30 dark:text-red-200"
       : activeDiagnostic.tone === "warning"
-        ? "border-amber-200 bg-amber-50 text-amber-800"
-        : "border-blue-100 bg-blue-50 text-blue-700";
+        ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-100"
+        : "border-blue-100 bg-blue-50 text-blue-700 dark:border-blue-400/20 dark:bg-blue-950/30 dark:text-blue-100";
 
   return (
-    <div className={`mx-3 mt-3 max-w-[calc(100%-1.5rem)] overflow-hidden rounded-[12px] border px-3 py-2 ${toneClass}`}>
-      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+    <div className={`mx-3 mt-3 max-w-[calc(100%-1.5rem)] overflow-hidden rounded-card border px-3 py-2.5 ${toneClass}`} role="status">
+      <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="text-[12px] font-semibold">{activeDiagnostic.title}</div>
           <div className="mt-0.5 break-words text-[11px] leading-4 opacity-90">{activeDiagnostic.detail}</div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <button type="button" onClick={onRetry} className="rounded-pill bg-white/80 px-2 py-1 text-[11px] font-medium shadow-sm">
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button type="button" onClick={onRetry} className="kuno-focus-ring rounded-input bg-white/80 px-2.5 py-1 text-[11px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
             Retry
           </button>
-          <button type="button" onClick={onPair} className="rounded-pill bg-white/80 px-2 py-1 text-[11px] font-medium shadow-sm">
+          <button type="button" onClick={onPair} className="kuno-focus-ring rounded-input bg-white/80 px-2.5 py-1 text-[11px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
             Pair
           </button>
         </div>

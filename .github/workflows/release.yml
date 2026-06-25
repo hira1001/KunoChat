@@ -3,63 +3,110 @@ name: Release
 on:
   push:
     tags:
-      - 'v*' # v1.0.0 などのバージョンタグプッシュ時にビルドをトリガー
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
 
 jobs:
-  build-and-release:
-    permissions:
-      contents: write
+  preflight:
+    name: Release preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Verify release metadata and updater signing inputs
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: node scripts/release-preflight.mjs --tag "$GITHUB_REF_NAME" --require-updater-signing
+
+  create-release:
+    name: Create draft release
+    needs: preflight
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+    steps:
+      - name: Create a draft release before parallel uploads
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --title "KunoChat ${GITHUB_REF_NAME}" --notes "Automated desktop release. Installers are updater-signed; OS code signing is optional."
+          echo "release_id=$(gh release view "$GITHUB_REF_NAME" --json id --jq .id)" >> "$GITHUB_OUTPUT"
+
+  build-and-upload:
+    name: Build ${{ matrix.platform }}
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest'
-            args: '--target universal-apple-darwin'
-          - platform: 'windows-latest'
-            args: ''
-
-    runs-on: ${{ matrix.platform }}
+          - platform: macOS universal
+            os: macos-latest
+            args: "--target universal-apple-darwin"
+          - platform: Windows x64
+            os: windows-latest
+            args: ""
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Add Rust targets (macOS only)
-        if: matrix.platform == 'macos-latest'
-        run: |
-          rustup target add aarch64-apple-darwin
-          rustup target add x86_64-apple-darwin
-
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - name: Install frontend dependencies
         run: npm ci
-
       - name: Verify release candidate
         run: |
           npm run typecheck
           npm test
-
       - name: Verify Rust tests
         working-directory: src-tauri
         run: cargo test
-
-      - name: Build and Package Tauri App
+      - name: Build unsigned OS bundles and upload signed updater artifacts
         uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           tagName: ${{ github.ref_name }}
-          releaseName: 'KunoChat v__VERSION__'
-          releaseBody: 'KunoChat automatic production build. Check assets below.'
           releaseDraft: true
-          prerelease: false
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
+      - name: Upload build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: KunoChat-${{ matrix.platform }}
+          path: |
+            src-tauri/target/release/bundle/**/*.dmg
+            src-tauri/target/release/bundle/**/*.app
+            src-tauri/target/release/bundle/**/*.msi
+            src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/release/bundle/**/*.sig
+          if-no-files-found: error
+
+  publish:
+    name: Publish complete release
+    needs: build-and-upload
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish only after every platform bundle is present
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false

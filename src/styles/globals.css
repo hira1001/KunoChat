@@ -12,6 +12,7 @@
 html,
 body,
 #root {
+  height: 100%;
   min-height: 100%;
   width: 100%;
   max-width: 100%;
@@ -25,6 +26,9 @@ body {
   color: var(--text);
   font-family:
     "Outfit",
+    "Hiragino Sans",
+    "Yu Gothic",
+    "Noto Sans JP",
     ui-sans-serif,
     system-ui,
     -apple-system,
@@ -36,6 +40,7 @@ body {
   text-rendering: geometricPrecision;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
   transition: background 0.3s var(--ease-smooth), color 0.3s var(--ease-smooth);
 }
 
@@ -90,6 +95,19 @@ svg {
   backdrop-filter: var(--blur-glass);
   -webkit-backdrop-filter: var(--blur-glass);
   border: 1px solid var(--border);
+}
+
+.kuno-brand-mark {
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 7px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+}
+
+.kuno-brand-mark img {
+  transform: scale(1.12);
 }
 
 /* ─── Message enter animation ─── */
@@ -250,29 +268,6 @@ svg {
 @keyframes kuno-drop-pulse {
   0%, 100% { border-color: rgba(37, 99, 235, 0.5); }
   50%       { border-color: rgba(37, 99, 235, 1); }
-}
-
-/* ─── Sonar Radar pulsing ─── */
-@keyframes radar-pulse {
-  0% {
-    transform: scale(0.95);
-    opacity: 0.8;
-  }
-  100% {
-    transform: scale(2.4);
-    opacity: 0;
-  }
-}
-.kuno-radar-ring {
-  animation: radar-pulse 3s cubic-bezier(0.21, 0.6, 0.35, 1) infinite;
-}
-.kuno-radar-ring-2 {
-  animation: radar-pulse 3s cubic-bezier(0.21, 0.6, 0.35, 1) infinite;
-  animation-delay: 1.0s;
-}
-.kuno-radar-ring-3 {
-  animation: radar-pulse 3s cubic-bezier(0.21, 0.6, 0.35, 1) infinite;
-  animation-delay: 2.0s;
 }
 
 /* ─── Reduced motion ─── */

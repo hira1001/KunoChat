@@ -11,9 +11,11 @@ KunoChat is split into UI, domain state, native integration, signaling, RTC, tra
 - LAN discovery: `src-tauri/src/native/peer_discovery.rs` broadcasts/listens on the local network and asks the UI to auto-connect when another KunoChat instance appears.
 - Tailscale discovery: `src-tauri/src/native/tailscale_discovery.rs` reads `tailscale status --json` when available, probes peer port `8787`, and emits the same auto-connect event without requiring manual IP entry.
 - RTC: two WebRTC DataChannels are active: `control` and `binary`.
+- Device identity: Rust generates an Ed25519 key once per installed app and stores its seed in the platform credential vault. `control` remains unavailable until both peers prove possession of their private keys over a room-, peer-, key-, and nonce-bound challenge. The first verified peer is trusted on first use; any later key change is rejected.
 - Transfer: text, typing, ACK, and asset metadata stay on `control`; file/image bytes stream on `binary`.
 - Integrity: asset metadata can include SHA-256; native receivers verify the completed part file before moving it into the selected save folder.
 - Storage: local UI persistence is active now; SQLite/store boundaries are present for durable native history and settings.
+- Recovery: native transfer session metadata is atomically stored in the app data directory. On launch, active records become interrupted candidates; compatible path-backed outgoing files are re-announced after device verification and incoming part-file byte counts are requested as byte-range resumes.
 
 ## Fast Send Model
 
@@ -36,6 +38,7 @@ Sending should feel immediate:
 - WebSocket signaling remains setup-only, so send speed does not depend on uploading content to a server.
 - Installed desktop apps on the same Wi-Fi/LAN do not need a separate signaling command; the server is embedded in the app process.
 - Remote computers on the same Tailscale tailnet can also connect without KunoChat-specific setup when both apps are open and reachable.
+- No text, metadata, transfer request, or binary frame is accepted from the RTC channel until device identity verification completes.
 
 ## Native Boundary
 

@@ -78,7 +78,10 @@ async fn run_discovery(app: AppHandle) {
             continue;
         }
 
-        let key = format!("{}:{}:{}", candidate.signaling_url, candidate.room_id, candidate.mode);
+        let key = format!(
+            "{}:{}:{}",
+            candidate.signaling_url, candidate.room_id, candidate.mode
+        );
         let now = Instant::now();
         if !should_emit_candidate(&last_candidate, &key, now) {
             continue;
@@ -98,9 +101,15 @@ async fn run_discovery(app: AppHandle) {
     }
 }
 
-fn should_emit_candidate(last_candidate: &Option<(String, Instant)>, key: &str, now: Instant) -> bool {
+fn should_emit_candidate(
+    last_candidate: &Option<(String, Instant)>,
+    key: &str,
+    now: Instant,
+) -> bool {
     match last_candidate {
-        Some((last_key, last_seen)) if last_key == key => now.duration_since(*last_seen) >= REEMIT_AFTER,
+        Some((last_key, last_seen)) if last_key == key => {
+            now.duration_since(*last_seen) >= REEMIT_AFTER
+        }
         _ => true,
     }
 }
@@ -186,7 +195,11 @@ fn select_candidate(status: &TailscaleStatus) -> Option<TailscaleCandidate> {
 
     peers.sort_by(|left, right| left.0.cmp(&right.0));
     let (peer_id, peer_ip, peer_hint) = peers.into_iter().next()?;
-    let server_ip = if self_id <= peer_id.as_str() { self_ip } else { peer_ip.as_str() };
+    let server_ip = if self_id <= peer_id.as_str() {
+        self_ip
+    } else {
+        peer_ip.as_str()
+    };
     let mode = if server_ip == self_ip { "host" } else { "join" };
 
     Some(TailscaleCandidate {
@@ -210,20 +223,26 @@ fn peer_hint(node: &TailscaleNode) -> String {
     if !dns_name.is_empty() {
         return dns_name.to_string();
     }
-    first_tailscale_ip(node).unwrap_or("Tailscale peer").to_string()
+    first_tailscale_ip(node)
+        .unwrap_or("Tailscale peer")
+        .to_string()
 }
 
 fn is_kunochat_reachable(peer_hint: &str) -> bool {
     let Ok(addresses) = (peer_hint, SIGNALING_PORT).to_socket_addrs() else {
         return false;
     };
-    addresses
-        .into_iter()
-        .any(|address: SocketAddr| TcpStream::connect_timeout(&address, Duration::from_millis(450)).is_ok())
+    addresses.into_iter().any(|address: SocketAddr| {
+        TcpStream::connect_timeout(&address, Duration::from_millis(450)).is_ok()
+    })
 }
 
 fn room_id_for_pair(left: &str, right: &str) -> String {
-    let (first, second) = if left <= right { (left, right) } else { (right, left) };
+    let (first, second) = if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    };
     let mut hash = 2_166_136_261_u32;
     for byte in first.bytes().chain(second.bytes()) {
         hash ^= u32::from(byte);
@@ -257,7 +276,10 @@ mod tests {
     #[test]
     fn selects_online_peer() {
         let mut peer = HashMap::new();
-        peer.insert("peer".to_string(), node("peer", "100.64.0.2", "peer.tailnet.ts.net.", true));
+        peer.insert(
+            "peer".to_string(),
+            node("peer", "100.64.0.2", "peer.tailnet.ts.net.", true),
+        );
         let status = TailscaleStatus {
             self_node: node("self", "100.64.0.1", "self.tailnet.ts.net.", true),
             peer,
@@ -270,7 +292,10 @@ mod tests {
     #[test]
     fn ignores_offline_peer() {
         let mut peer = HashMap::new();
-        peer.insert("peer".to_string(), node("peer", "100.64.0.2", "peer.tailnet.ts.net.", false));
+        peer.insert(
+            "peer".to_string(),
+            node("peer", "100.64.0.2", "peer.tailnet.ts.net.", false),
+        );
         let status = TailscaleStatus {
             self_node: node("self", "100.64.0.1", "self.tailnet.ts.net.", true),
             peer,
@@ -281,7 +306,10 @@ mod tests {
     #[test]
     fn lower_id_hosts() {
         let mut peer = HashMap::new();
-        peer.insert("peer".to_string(), node("z-peer", "100.64.0.2", "peer.tailnet.ts.net.", true));
+        peer.insert(
+            "peer".to_string(),
+            node("z-peer", "100.64.0.2", "peer.tailnet.ts.net.", true),
+        );
         let status = TailscaleStatus {
             self_node: node("a-self", "100.64.0.1", "self.tailnet.ts.net.", true),
             peer,
@@ -294,7 +322,10 @@ mod tests {
     #[test]
     fn higher_id_joins() {
         let mut peer = HashMap::new();
-        peer.insert("peer".to_string(), node("a-peer", "100.64.0.2", "peer.tailnet.ts.net.", true));
+        peer.insert(
+            "peer".to_string(),
+            node("a-peer", "100.64.0.2", "peer.tailnet.ts.net.", true),
+        );
         let status = TailscaleStatus {
             self_node: node("z-self", "100.64.0.1", "self.tailnet.ts.net.", true),
             peer,
@@ -332,7 +363,10 @@ mod tests {
         .expect("status json should parse");
 
         assert_eq!(status.self_node.id, "self-id");
-        assert_eq!(status.peer.values().next().expect("peer").tailscale_ips[0], "100.64.0.2");
+        assert_eq!(
+            status.peer.values().next().expect("peer").tailscale_ips[0],
+            "100.64.0.2"
+        );
     }
 
     #[test]
@@ -351,13 +385,21 @@ mod tests {
     fn should_suppress_same_candidate_until_reemit_window() {
         let now = Instant::now();
         let last_candidate = Some(("same".to_string(), now));
-        assert!(!should_emit_candidate(&last_candidate, "same", now + Duration::from_secs(2)));
+        assert!(!should_emit_candidate(
+            &last_candidate,
+            "same",
+            now + Duration::from_secs(2)
+        ));
     }
 
     #[test]
     fn should_reemit_same_candidate_after_reemit_window() {
         let now = Instant::now();
         let last_candidate = Some(("same".to_string(), now));
-        assert!(should_emit_candidate(&last_candidate, "same", now + REEMIT_AFTER));
+        assert!(should_emit_candidate(
+            &last_candidate,
+            "same",
+            now + REEMIT_AFTER
+        ));
     }
 }

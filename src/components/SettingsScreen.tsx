@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
+import { BrandMark } from "./BrandMark";
 
 type UpdateState =
   | { type: "idle" }
@@ -24,7 +25,7 @@ type SettingsScreenProps = {
 };
 
 export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, onClearHistory }: SettingsScreenProps) {
-  const [isDark, setIsDark] = useState(() => document.body.classList.contains("dark"));
+  const isDark = settings.theme === "dark";
   const [currentVersion, setCurrentVersion] = useState<string>("0.2.0");
   const [updateState, setUpdateState] = useState<UpdateState>({ type: "idle" });
 
@@ -86,20 +87,14 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
   }
 
   function toggleDarkMode() {
-    const next = !isDark;
-    setIsDark(next);
-    document.body.classList.toggle("dark", next);
-    document.documentElement.classList.toggle("dark", next);
-    document.documentElement.classList.toggle("light", !next);
+    onChange({ theme: isDark ? "light" : "dark" });
   }
 
   return (
     <div className="kuno-screen-enter flex h-full w-full min-w-0 max-w-full flex-col overflow-hidden bg-bg">
       {/* Header */}
       <header className="flex h-[48px] min-w-0 shrink-0 items-center gap-2 overflow-hidden border-b border-border bg-bg-glass px-4 backdrop-blur-[20px]">
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-accent">
-          <span className="h-1.5 w-1.5 rounded-sm bg-white" />
-        </span>
+        <BrandMark className="h-5 w-5" />
         <div className="min-w-0 flex-1 truncate text-[13px] font-semibold tracking-[-0.01em] text-text">
           KunoChat
         </div>
@@ -130,7 +125,7 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
 
         {/* Profile section */}
         <SectionTitle className="mt-5">プロフィール</SectionTitle>
-        <div className="mt-2 overflow-hidden rounded-[13px] border border-border bg-surface p-3 shadow-card">
+        <div className="mt-2 overflow-hidden rounded-card border border-border bg-surface p-3 shadow-card">
           <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-faint" htmlFor="display-name">
             表示名
           </label>
@@ -138,7 +133,7 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
             id="display-name"
             value={settings.displayName}
             onChange={(event) => onChange({ displayName: event.target.value })}
-            className="kuno-focus-ring mt-2 h-9 w-full rounded-[10px] border border-border bg-bg px-3 text-[13px] text-text outline-none transition-all duration-200 placeholder:text-faint focus:border-accent/40 focus:shadow-[0_0_0_3px_var(--accent-soft)]"
+            className="kuno-focus-ring mt-2 h-9 w-full rounded-input border border-border bg-bg px-3 text-[13px] text-text outline-none transition-all duration-200 placeholder:text-faint focus:border-accent/40 focus:shadow-[0_0_0_3px_var(--accent-soft)]"
           />
         </div>
 
@@ -148,7 +143,7 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
           type="button"
           id="pick-save-folder-btn"
           onClick={onPickSaveFolder}
-          className="kuno-focus-ring mt-2 flex h-10 w-full min-w-0 items-center gap-2.5 overflow-hidden rounded-[11px] border border-border bg-surface px-3 text-left shadow-card transition-all duration-150 hover:border-border-strong hover:shadow-window active:scale-[0.99]"
+          className="kuno-focus-ring mt-2 flex h-10 w-full min-w-0 items-center gap-2.5 overflow-hidden rounded-card border border-border bg-surface px-3 text-left shadow-card transition-all duration-150 hover:border-border-strong hover:shadow-window active:scale-[0.99]"
         >
           <FolderOpen className="h-4 w-4 shrink-0 text-accent" />
           <span className="min-w-0 flex-1 truncate text-[12px] text-text">{settings.saveFolder}</span>
@@ -157,7 +152,7 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
 
         {/* Toggles */}
         <SectionTitle className="mt-5">環境設定</SectionTitle>
-        <div className="mt-2 overflow-hidden rounded-[13px] border border-border bg-surface shadow-card divide-y divide-border">
+        <div className="mt-2 overflow-hidden rounded-card border border-border bg-surface shadow-card divide-y divide-border">
           <Toggle
             id="toggle-always-on-top"
             label="Always on top"
@@ -190,7 +185,7 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
 
         {/* Shortcut */}
         <SectionTitle className="mt-5">ショートカット</SectionTitle>
-        <div className="mt-2 flex h-10 min-w-0 items-center overflow-hidden rounded-[11px] border border-border bg-surface text-[12px] shadow-card">
+        <div className="mt-2 flex h-10 min-w-0 items-center overflow-hidden rounded-card border border-border bg-surface text-[12px] shadow-card">
           <div className="min-w-0 flex-1 truncate px-3 font-mono text-text">
             {settings.shortcut.replace("CommandOrControl", "⌘/Ctrl")}
           </div>
@@ -205,7 +200,7 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
 
         {/* App Update Section */}
         <SectionTitle className="mt-5">アプリのアップデート</SectionTitle>
-        <div className="mt-2 overflow-hidden rounded-[13px] border border-border bg-surface p-4 shadow-card transition-all duration-300">
+        <div className="mt-2 overflow-hidden rounded-card border border-border bg-surface p-4 shadow-card transition-all duration-300">
           <div className="flex items-center justify-between">
             <div>
               <div className="text-[13px] font-semibold text-text">KunoChat</div>
@@ -216,7 +211,7 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
                 type="button"
                 id="check-updates-btn"
                 onClick={handleCheckForUpdates}
-                className="kuno-focus-ring flex h-8 items-center gap-1.5 rounded-[9px] bg-accent px-3 text-[12px] font-semibold text-white shadow-sm transition-all duration-150 hover:bg-accent-hover active:scale-95"
+                className="kuno-focus-ring flex h-8 items-center gap-1.5 rounded-input bg-accent px-3 text-[12px] font-semibold text-white shadow-sm transition-all duration-150 hover:bg-accent-hover active:scale-95"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
                 アップデートを確認
@@ -242,9 +237,9 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
             <div className="mt-3">
               <div className="flex items-center gap-2 text-[12px] text-danger">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                <span className="font-semibold">エラーが発生しました</span>
+                <span className="font-semibold">アップデートを確認できません</span>
               </div>
-              <div className="mt-1 text-[11px] text-faint line-clamp-2">{updateState.message}</div>
+              <div className="mt-1 text-[11px] leading-4 text-faint">ネットワーク接続を確認して、しばらくしてから再試行してください。</div>
               <button
                 type="button"
                 onClick={handleCheckForUpdates}
@@ -256,7 +251,7 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
           )}
 
           {updateState.type === "available" && (
-            <div className="mt-3 rounded-[10px] bg-accent-soft border border-accent/20 p-3">
+            <div className="mt-3 rounded-card border border-accent/20 bg-accent-soft p-3">
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <div className="text-[13px] font-semibold text-accent">新バージョン v{updateState.version} が利用可能です</div>
@@ -274,7 +269,7 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
                 type="button"
                 id="install-update-btn"
                 onClick={() => handleDownloadAndInstall(updateState.updateObj)}
-                className="mt-3 flex w-full h-9 items-center justify-center gap-1.5 rounded-[8px] bg-accent text-[12px] font-semibold text-white shadow-sm transition-all duration-150 hover:bg-accent-hover active:scale-95"
+                className="mt-3 flex h-9 w-full items-center justify-center gap-1.5 rounded-input bg-accent text-[12px] font-semibold text-white shadow-sm transition-all duration-150 hover:bg-accent-hover active:scale-95"
               >
                 <Download className="h-4 w-4" />
                 ダウンロードしてインストール
@@ -314,7 +309,7 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
           type="button"
           id="clear-history-btn"
           onClick={onClearHistory}
-          className="kuno-focus-ring mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-[11px] border border-danger/30 bg-surface text-[12px] font-semibold text-danger shadow-card transition-all duration-200 hover:border-danger hover:bg-red-50 active:scale-[0.99] dark:hover:bg-red-950/30"
+          className="kuno-focus-ring mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-card border border-danger/30 bg-surface text-[12px] font-semibold text-danger shadow-card transition-all duration-200 hover:border-danger hover:bg-red-50 active:scale-[0.99] dark:hover:bg-red-950/30"
         >
           <Trash2 className="h-4 w-4" />
           履歴を消去

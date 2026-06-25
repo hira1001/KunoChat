@@ -20,12 +20,16 @@ type ChatStore = {
   draftText: string;
   attachments: DraftAttachment[];
   transferStates: Record<string, TransferState>;
+  unreadCount: number;
   isDraggingOver: boolean;
   peerTyping: boolean;
+  peerTypingAt: number;
   settings: KunoSettings;
   setView: (view: AppView) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
-  setPeerTyping: (isTyping: boolean) => void;
+  incrementUnread: () => void;
+  clearUnread: () => void;
+  setPeerTyping: (isTyping: boolean, at?: number) => void;
   markMessageStatus: (messageId: string, status: ChatMessage["status"]) => void;
   failMessage: (messageId: string, message: string, code?: string) => void;
   markInterruptedTransfers: (message?: string) => void;
@@ -72,7 +76,8 @@ const defaultSettings: KunoSettings = {
   launchAtLogin: false,
   notifications: true,
   sound: true,
-  shortcut: "CommandOrControl + Shift + Space"
+  shortcut: "CommandOrControl + Shift + Space",
+  theme: "light"
 };
 
 const currentStorageVersion = 2;
@@ -87,13 +92,18 @@ export const useChatStore = create<ChatStore>()(
       draftText: "",
       attachments: [],
       transferStates: {},
+      unreadCount: 0,
       isDraggingOver: false,
       peerTyping: false,
+      peerTypingAt: 0,
       settings: defaultSettings,
       history: [],
       setView: (currentView) => set({ currentView }),
       setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
-      setPeerTyping: (peerTyping) => set({ peerTyping }),
+      incrementUnread: () => set((state) => ({ unreadCount: Math.min(state.unreadCount + 1, 99) })),
+      clearUnread: () => set({ unreadCount: 0 }),
+      setPeerTyping: (peerTyping, at = Date.now()) =>
+        set((state) => (at < state.peerTypingAt ? state : { peerTyping, peerTypingAt: at })),
       markMessageStatus: (messageId, status) =>
         set((state) => {
           const target = state.messages.find((message) => message.id === messageId);
@@ -738,10 +748,12 @@ export const useChatStore = create<ChatStore>()(
       name: "kunochat-local-state",
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
-        messages: state.messages,
+        messages: serializeMessagesForStorage(state.messages),
         storageVersion: state.storageVersion,
         connectionStatus: state.connectionStatus,
-        settings: state.settings
+        unreadCount: state.unreadCount,
+        settings: state.settings,
+        transferStates: state.transferStates
       }),
       merge: (persisted, current) => {
         const persistedState = persisted as Partial<ChatStore> | undefined;
@@ -751,10 +763,12 @@ export const useChatStore = create<ChatStore>()(
           storageVersion: currentStorageVersion,
           currentView: "main",
           connectionStatus: persistedState?.connectionStatus === "connected" ? "reconnecting" : "pairing",
+          unreadCount: Math.min(Math.max(persistedState?.unreadCount ?? 0, 0), 99),
           attachments: [],
-          transferStates: {},
+          transferStates: sanitizePersistedTransferStates(persistedState?.transferStates),
           isDraggingOver: false,
           peerTyping: false,
+          peerTypingAt: 0,
           settings: {
             ...defaultSettings,
             ...persistedState?.settings,
@@ -775,7 +789,54 @@ function sanitizePersistedMessages(messages: unknown, fallback: ChatMessage[]): 
     return fallback;
   }
 
-  return messages.filter(isChatMessage);
+  return messages.filter(isChatMessage).map((message) => ({
+    ...message,
+    status: message.status === "sending" || message.status === "receiving" ? "queued" : message.status,
+    asset: message.asset ? withoutFile(message.asset) : undefined,
+    bundle: message.bundle
+      ? {
+          ...message.bundle,
+          items: message.bundle.items.map(withoutFile)
+        }
+      : undefined
+  }));
+}
+
+function serializeMessagesForStorage(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((message) => ({
+    ...message,
+    asset: message.asset ? withoutFile(message.asset) : undefined,
+    bundle: message.bundle
+      ? {
+          ...message.bundle,
+          items: message.bundle.items.map(withoutFile)
+        }
+      : undefined
+  }));
+}
+
+function withoutFile<T extends { file?: File }>(asset: T): T {
+  const { file: _file, ...persistedAsset } = asset;
+  return persistedAsset as T;
+}
+
+function sanitizePersistedTransferStates(value: unknown): Record<string, TransferState> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([transferId, state]) => {
+      if (!state || typeof state !== "object" || !("transferId" in state) || (state as TransferState).transferId !== transferId) {
+        return [];
+      }
+      const candidate = state as TransferState;
+      if (!Number.isFinite(candidate.progress) || candidate.progress < 0 || candidate.progress > 100) {
+        return [];
+      }
+      return [[transferId, { ...candidate, status: candidate.status === "sending" || candidate.status === "receiving" ? "queued" : candidate.status }]];
+    })
+  );
 }
 
 function failMessageState(

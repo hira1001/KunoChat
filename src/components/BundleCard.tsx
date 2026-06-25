@@ -17,7 +17,7 @@ export function BundleCard({ bundle, status }: BundleCardProps) {
   return (
     <div
       className={clsx(
-        "relative w-full min-w-0 max-w-full overflow-hidden rounded-[13px] border bg-surface p-3 shadow-card transition-all duration-300",
+        "relative w-full min-w-0 max-w-full overflow-hidden rounded-card border bg-surface p-3 shadow-card transition-all duration-300",
         isDone ? "border-success/30" : failed ? "border-danger/30" : "border-border"
       )}
     >
@@ -31,7 +31,7 @@ export function BundleCard({ bundle, status }: BundleCardProps) {
       <div className="flex min-w-0 items-start gap-3 pr-8">
         {/* Bundle icon */}
         <div className={clsx(
-          "grid h-10 w-10 shrink-0 place-items-center rounded-[9px] text-white shadow-sm transition-all duration-200",
+          "grid h-10 w-10 shrink-0 place-items-center rounded-[7px] text-white shadow-sm transition-all duration-200",
           isSending ? "animate-pulse bg-amber-500" : isDone ? "bg-green-600" : failed ? "bg-red-500" : "bg-amber-500"
         )}>
           <Files className="h-5 w-5" />

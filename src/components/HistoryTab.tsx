@@ -87,12 +87,12 @@ export function HistoryTab() {
             {filtered.map((item) => (
               <div
                 key={item.id}
-                className="group flex min-w-0 flex-col gap-3 rounded-[13px] border border-border bg-surface p-3 shadow-card transition-all duration-200 hover:shadow-window"
+                className="group flex min-w-0 flex-col gap-3 rounded-card border border-border bg-surface p-3 shadow-card transition-all duration-200 hover:border-border-strong hover:shadow-window"
               >
                 <div className="flex min-w-0 items-start gap-3">
                   {/* Direction & Type Icon */}
                   <div className="relative shrink-0">
-                    <div className="grid h-9 w-9 place-items-center rounded-[9px] bg-surface-active text-muted shadow-sm">
+                    <div className="grid h-9 w-9 place-items-center rounded-card bg-surface-active text-muted shadow-sm">
                       {item.isFolder ? (
                         <Folder className="h-4 w-4 text-amber-500 fill-amber-500/20" />
                       ) : (

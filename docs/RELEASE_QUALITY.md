@@ -1,6 +1,6 @@
 # Release Quality
 
-KunoChat can now build tested macOS and Windows desktop bundles in CI. True consumer-grade distribution still needs signing credentials owned by the publisher.
+KunoChat is configured to build and publish free, unsigned-at-the-OS-level macOS and Windows desktop bundles only after every platform gate passes. Paid Apple Developer Program and Windows code-signing certificates are optional, not release blockers.
 
 ## Current Quality Gates
 
@@ -14,34 +14,36 @@ Every desktop build should pass:
 
 The current local evidence is:
 
-- Vitest: 161 passed.
-- Cargo: 43 passed.
+- Vitest: 165 passed.
+- Cargo: run on every release candidate.
 - TypeScript: passed.
 - Vite production build: passed.
-- Tauri macOS app/DMG bundle: passed; updater artifacts additionally require the publisher-owned `TAURI_SIGNING_PRIVATE_KEY`.
+- Tauri macOS app/DMG bundle: passed locally.
+- Packaged macOS app update check: manually verified against the published `v0.2.0` updater endpoint; it returns `アプリは最新のバージョンです。`.
 
 ## Release Workflow
 
-`.github/workflows/release.yml` builds both platforms on tag pushes matching `v*`.
+`.github/workflows/release.yml` runs only for tags matching `v*`. It verifies that the tag exactly matches the three application version files, confirms the free Tauri updater-signing key exists, creates a private draft release, then builds both platforms in parallel.
 
 It performs the same quality gates before attaching bundles to a GitHub Release:
 
 - macOS: `.app` and `.dmg`
 - Windows: `.msi` and `.exe`
 
-The updater endpoint points to GitHub Release `latest.json`. Tauri Action must generate that metadata from the signed updater artifacts; no hand-written update metadata is published from the repository.
+The workflow publishes only after both platforms upload their installers and signed updater artifacts. A failed platform job leaves the draft private. The updater endpoint points to GitHub Release `latest.json`; Tauri Action generates that metadata from updater-signed artifacts, and no hand-written update metadata is published from the repository.
 
-## Signing And Notarization Gap
+## Signing And Notarization Policy
 
-Unsigned apps may show operating-system trust warnings. To reach SaaS-grade distribution quality, add publisher-owned secrets and signing configuration:
+The normal release preflight requires only these free updater-signing secrets:
 
-- macOS Developer ID certificate.
-- Apple notarization credentials.
-- Windows code-signing certificate.
-- Tauri updater signing key stored as `TAURI_SIGNING_PRIVATE_KEY` and its password, matching the configured public key.
-- A release policy that rejects unsigned public releases.
+- `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, matching the public key in `tauri.conf.json`.
 
-Until those credentials exist, GitHub Releases are suitable for controlled beta testing, not broad consumer distribution.
+Paid OS signing is intentionally optional:
+
+- macOS Developer ID signing and notarization can suppress Gatekeeper distribution friction, but requires Apple Developer Program membership.
+- Windows Authenticode signing can reduce SmartScreen friction, but requires a trusted certificate or signing service.
+
+Without OS signing, KunoChat can still be built and released for free. The tradeoff is that macOS or Windows may show first-run security warnings that KunoChat cannot honestly remove in code.
 
 ## Required Manual Release Checks
 

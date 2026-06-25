@@ -132,4 +132,10 @@ export type KunoSettings = {
   notifications: boolean;
   sound: boolean;
   shortcut: string;
+  theme: "light" | "dark";
+  trustedPeer?: {
+    publicKey: string;
+    fingerprint: string;
+    verifiedAt: number;
+  };
 };

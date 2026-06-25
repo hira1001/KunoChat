@@ -37,7 +37,8 @@ pub fn start(app: AppHandle) {
 
 async fn run_discovery(app: AppHandle) -> Result<(), String> {
     let instance_id = create_instance_id();
-    let std_socket = StdUdpSocket::bind(("0.0.0.0", DISCOVERY_PORT)).map_err(|error| error.to_string())?;
+    let std_socket =
+        StdUdpSocket::bind(("0.0.0.0", DISCOVERY_PORT)).map_err(|error| error.to_string())?;
     std_socket
         .set_broadcast(true)
         .map_err(|error| error.to_string())?;
@@ -111,7 +112,9 @@ async fn run_discovery(app: AppHandle) -> Result<(), String> {
 
 fn should_emit_peer(last_peer: &Option<(String, Instant)>, dedupe_key: &str, now: Instant) -> bool {
     match last_peer {
-        Some((last_key, last_seen)) if last_key == dedupe_key => now.duration_since(*last_seen) >= REEMIT_AFTER,
+        Some((last_key, last_seen)) if last_key == dedupe_key => {
+            now.duration_since(*last_seen) >= REEMIT_AFTER
+        }
         _ => true,
     }
 }
@@ -135,7 +138,11 @@ fn ipv4_number(ip: Ipv4Addr) -> u32 {
 }
 
 fn room_id_for_pair(left: &str, right: &str) -> String {
-    let (first, second) = if left <= right { (left, right) } else { (right, left) };
+    let (first, second) = if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    };
     let mut hash = 2_166_136_261_u32;
     for byte in first.bytes().chain(second.bytes()) {
         hash ^= u32::from(byte);
@@ -150,7 +157,9 @@ mod tests {
 
     #[test]
     fn ipv4_number_preserves_ordering() {
-        assert!(ipv4_number(Ipv4Addr::new(192, 168, 1, 2)) < ipv4_number(Ipv4Addr::new(192, 168, 1, 3)));
+        assert!(
+            ipv4_number(Ipv4Addr::new(192, 168, 1, 2)) < ipv4_number(Ipv4Addr::new(192, 168, 1, 3))
+        );
     }
 
     #[test]
@@ -160,7 +169,10 @@ mod tests {
 
     #[test]
     fn room_id_for_pair_is_symmetric() {
-        assert_eq!(room_id_for_pair("left", "right"), room_id_for_pair("right", "left"));
+        assert_eq!(
+            room_id_for_pair("left", "right"),
+            room_id_for_pair("right", "left")
+        );
     }
 
     #[test]
@@ -182,7 +194,10 @@ mod tests {
             instance_id: "abc".to_string(),
         };
         let value = serde_json::to_value(message).expect("serialize");
-        assert_eq!(value, serde_json::json!({ "app": "KunoChat", "instanceId": "abc" }));
+        assert_eq!(
+            value,
+            serde_json::json!({ "app": "KunoChat", "instanceId": "abc" })
+        );
     }
 
     #[test]
@@ -218,7 +233,11 @@ mod tests {
     fn should_suppress_same_peer_until_reemit_window() {
         let now = Instant::now();
         let last_peer = Some(("same".to_string(), now));
-        assert!(!should_emit_peer(&last_peer, "same", now + Duration::from_secs(1)));
+        assert!(!should_emit_peer(
+            &last_peer,
+            "same",
+            now + Duration::from_secs(1)
+        ));
     }
 
     #[test]

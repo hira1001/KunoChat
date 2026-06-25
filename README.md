@@ -8,6 +8,7 @@ KunoChat is a tiny Windows/macOS desktop send pocket for two people. It is desig
 - No cloud file bodies: the embedded WebSocket signaling server exchanges only pairing and WebRTC setup data; WebRTC DataChannel carries message bodies.
 - Native desktop feel: normal resizable/movable OS window, optional always-on-top, tray/menu bar, shortcuts, notifications, open/reveal, autostart, single instance, and window positioning.
 - Speed first: text and control messages use an instant-priority control channel so large files never block quick chat updates.
+- Device continuity: each installed app keeps an Ed25519 device key in the OS secure credential store. A WebRTC channel becomes usable only after mutual signed identity verification; a changed paired key is rejected.
 
 ## Stack
 
@@ -83,6 +84,7 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 - LAN auto-discovery so two installed apps on the same network can connect without separate setup.
 - Tailscale auto-discovery for remote computers that already share a tailnet and have KunoChat open.
 - WebRTC `control` DataChannel for instant text, typing, ping/pong, and ACK.
+- Mutual device authentication on the control channel, with the paired device public-key fingerprint retained locally for future connections.
 - WebRTC `binary` DataChannel for dropped/pasted file and image bodies.
 - Native path-backed reads for files selected with the `+` picker, tray Send File, or shortcut entrypoint.
 - File transfer metadata/progress/completion over `control`, chunks over `binary`.
@@ -96,6 +98,7 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 - Received files are saved locally under `Downloads/KunoChat` and keep their saved path for reveal/open flows.
 - Optimistic send UX: Send immediately renders locally, clears the composer, then updates `queued -> sending -> received` as the peer requests and verifies file bytes.
 - Interrupted outgoing sends become retryable failures instead of getting stuck in `sending`.
+- Crash-safe native transfer session records and local UI transfer state persistence. On reconnect, a compatible path-backed outgoing file is re-announced and a receiver resumes from its retained part-file byte count.
 - Failed/cancelled outgoing messages expose an inline Retry action and preserve local file references when available.
 - Teams-style typing indicator over the same instant control channel.
 - Connection-aware composer, drag/drop, paste, and picker behavior.
@@ -114,10 +117,9 @@ The repository includes `.github/workflows/desktop-build.yml` to build macOS and
 ## Next Phases
 
 1. Add an optional public relay for remote networks where neither LAN nor Tailscale can reach the other computer.
-2. Add reconnect/session resume and byte-range resume for interrupted binary transfers.
-3. Add richer transfer controls for pausing, resuming, and per-file cancellation inside bundles.
-4. Run two-machine flaky-network and NAT traversal tests, adding TURN only when needed.
-5. Add publisher signing/notarization credentials for warning-free public distribution.
+2. Add richer transfer controls for pausing, resuming, and per-file cancellation inside bundles.
+3. Run two-machine flaky-network and NAT traversal tests, adding TURN only when needed.
+4. Keep OS code signing optional; add publisher signing/notarization only if warning-free public distribution becomes necessary.
 
 ## Performance Validation
 

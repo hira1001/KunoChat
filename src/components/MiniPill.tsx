@@ -1,6 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import type { ConnectionStatus } from "../features/chat/messageTypes";
 import { StatusDot } from "./StatusDot";
+import { BrandMark } from "./BrandMark";
 
 type MiniPillProps = {
   status: ConnectionStatus;
@@ -10,23 +11,28 @@ type MiniPillProps = {
 };
 
 export function MiniPill({ status, unreadCount, activeTransferCount, onOpen }: MiniPillProps) {
-  const dotStatus = unreadCount > 0 ? "unread" : status;
-  const dotLabel = unreadCount > 0 ? `${unreadCount} unread` : status;
   const transferProgress = activeTransferCount > 0;
+  const unreadLabel = unreadCount > 99 ? "99+" : String(unreadCount);
 
   return (
     <button
       type="button"
       onClick={onOpen}
-      className="kuno-focus-ring kuno-shell-expand relative flex h-[44px] w-[188px] items-center gap-2.5 rounded-[13px] border border-border bg-bg-glass px-4 text-left shadow-pill backdrop-blur-[20px] transition-all duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:shadow-window active:translate-y-0 active:scale-[0.98]"
+      className="kuno-focus-ring kuno-shell-expand relative flex h-[44px] w-full max-w-[188px] min-w-0 items-center gap-2.5 rounded-card border border-border bg-bg-glass px-4 text-left shadow-pill backdrop-blur-[20px] transition-all duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:shadow-window active:translate-y-0 active:scale-[0.98]"
       data-tauri-drag-region
     >
-      {/* Logo dot accent */}
-      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/10">
-        <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-      </span>
+      <BrandMark />
       <span className="flex-1 text-[13px] font-semibold tracking-[-0.01em] text-text">KunoChat</span>
-      <StatusDot status={dotStatus} label={dotLabel} />
+      {unreadCount > 0 ? (
+        <span
+          aria-label={`${unreadCount} unread messages`}
+          className="grid h-5 min-w-5 shrink-0 place-items-center rounded-pill bg-accent px-1 text-[10px] font-semibold leading-none text-white"
+        >
+          {unreadLabel}
+        </span>
+      ) : (
+        <StatusDot status={status} label={status} />
+      )}
       <ChevronRight className="h-3.5 w-3.5 text-faint transition-transform duration-200 group-hover:translate-x-0.5" />
       {/* Transfer progress strip */}
       {transferProgress ? (

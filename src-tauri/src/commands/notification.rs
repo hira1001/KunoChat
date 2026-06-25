@@ -12,7 +12,11 @@ pub async fn notify_message(app: AppHandle, title: String, body: String) -> Resu
 }
 
 #[tauri::command]
-pub async fn notify_file_received(app: AppHandle, filename: String, size: u64) -> Result<(), String> {
+pub async fn notify_file_received(
+    app: AppHandle,
+    filename: String,
+    size: u64,
+) -> Result<(), String> {
     app.notification()
         .builder()
         .title("KunoChat received a file")

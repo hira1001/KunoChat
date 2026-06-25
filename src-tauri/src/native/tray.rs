@@ -5,7 +5,8 @@ use tauri::{App, Emitter, Manager};
 pub fn build_tray(app: &mut App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open KunoChat", true, None::<&str>)?;
     let send_file = MenuItem::with_id(app, "send_file", "Send File...", true, None::<&str>)?;
-    let send_clipboard = MenuItem::with_id(app, "send_clipboard", "Send Clipboard", true, None::<&str>)?;
+    let send_clipboard =
+        MenuItem::with_id(app, "send_clipboard", "Send Clipboard", true, None::<&str>)?;
     let downloads = MenuItem::with_id(app, "downloads", "Open Downloads", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -24,7 +25,7 @@ pub fn build_tray(app: &mut App) -> tauri::Result<()> {
         ],
     )?;
 
-    TrayIconBuilder::new()
+    TrayIconBuilder::with_id("main")
         .tooltip("KunoChat")
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {

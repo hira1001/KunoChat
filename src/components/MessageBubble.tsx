@@ -41,7 +41,7 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, o
         {message.kind === "text" && message.text ? (
           <div
             className={clsx(
-              "max-w-full break-words rounded-[16px] px-3.5 py-2.5 text-[13px] leading-[1.55] shadow-card",
+              "max-w-full break-words rounded-[12px] px-3.5 py-2.5 text-[13px] leading-[1.55] shadow-card",
               mine
                 ? "bg-accent text-white shadow-[0_8px_24px_var(--accent-glow)]"
                 : "border border-border bg-surface text-text dark:bg-surface"

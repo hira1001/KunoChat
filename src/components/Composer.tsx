@@ -1,6 +1,6 @@
-import { Paperclip, Plus, SendHorizontal } from "lucide-react";
+import { Plus, SendHorizontal } from "lucide-react";
 import clsx from "clsx";
-import type { KeyboardEvent } from "react";
+import { useEffect, useRef, type KeyboardEvent } from "react";
 import { platformAdapter } from "../features/native/platformAdapter";
 
 type ComposerProps = {
@@ -10,10 +10,19 @@ type ComposerProps = {
   onChange: (value: string) => void;
   onSend: () => void;
   onPickFiles: () => void;
+  onBlur?: () => void;
 };
 
-export function Composer({ value, hasAttachments, disabled = false, onChange, onSend, onPickFiles }: ComposerProps) {
+export function Composer({ value, hasAttachments, disabled = false, onChange, onSend, onPickFiles, onBlur }: ComposerProps) {
   const canSend = !disabled && (value.trim().length > 0 || hasAttachments);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 112)}px`;
+  }, [value]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -44,22 +53,26 @@ export function Composer({ value, hasAttachments, disabled = false, onChange, on
     <div className="w-full min-w-0 max-w-full shrink-0 overflow-hidden border-t border-border bg-bg-glass px-3 py-3 backdrop-blur-[20px]">
       <div
         className={clsx(
-          "grid min-h-[44px] w-full min-w-0 max-w-full items-end gap-1.5 overflow-hidden rounded-[18px] border bg-surface p-1.5 transition-all duration-200",
+          "grid min-h-[44px] w-full min-w-0 max-w-full items-end gap-1.5 overflow-hidden rounded-input border bg-surface p-1.5 transition-all duration-200",
           disabled
             ? "border-border"
             : "border-border-strong shadow-[0_4px_20px_rgba(14,21,40,0.08)] focus-within:border-accent/40 focus-within:shadow-[0_6px_24px_rgba(37,99,235,0.14)]"
         )}
-        style={{ gridTemplateColumns: disabled ? "minmax(0, 1fr)" : "minmax(0, 1fr) 32px 32px 36px" }}
+        style={{ gridTemplateColumns: disabled ? "minmax(0, 1fr)" : "minmax(0, 1fr) 32px 36px" }}
       >
         <textarea
           id="composer-textarea"
+          ref={textareaRef}
+          aria-label="メッセージ"
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
+          onBlur={onBlur}
           placeholder={disabled ? "まずペアリングしてください..." : "メッセージを入力..."}
           disabled={disabled}
           rows={1}
-          className="max-h-24 min-h-8 w-full min-w-0 rounded-[12px] border-0 bg-transparent px-2.5 py-1.5 text-[13px] leading-5 text-text outline-none placeholder:text-faint disabled:text-muted"
+          aria-keyshortcuts="Enter"
+          className="max-h-28 min-h-8 w-full min-w-0 resize-none rounded-[6px] border-0 bg-transparent px-2.5 py-1.5 text-[13px] leading-5 text-text outline-none placeholder:text-faint disabled:text-muted"
         />
         {!disabled ? (
           <>
@@ -72,16 +85,6 @@ export function Composer({ value, hasAttachments, disabled = false, onChange, on
               className="kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted transition-all duration-150 hover:bg-surface-active hover:text-text active:scale-90"
             >
               <Plus className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              id="composer-clip-btn"
-              aria-label="クリップボードから添付"
-              title="クリップボードから添付"
-              onClick={onPickFiles}
-              className="kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted transition-all duration-150 hover:bg-surface-active hover:text-text active:scale-90"
-            >
-              <Paperclip className="h-3.5 w-3.5" />
             </button>
             <button
               type="button"

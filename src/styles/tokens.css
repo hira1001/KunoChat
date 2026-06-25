@@ -1,20 +1,20 @@
 /* ─── Light mode tokens (default) ─── */
 :root {
   /* Backgrounds */
-  --bg: #f4f6fb;
-  --bg-glass: rgba(250, 251, 255, 0.82);
-  --surface: #f0f3f9;
-  --surface-hover: #e8ecf4;
-  --surface-active: #dde3ef;
+  --bg: #fcfcfd;
+  --bg-glass: rgba(252, 252, 253, 0.94);
+  --surface: #ffffff;
+  --surface-hover: #f4f5f7;
+  --surface-active: #e9ebef;
 
   /* Borders */
-  --border: rgba(30, 40, 80, 0.10);
-  --border-strong: rgba(30, 40, 80, 0.22);
+  --border: rgba(15, 23, 42, 0.11);
+  --border-strong: rgba(15, 23, 42, 0.24);
 
   /* Text */
-  --text: #0e1528;
-  --muted: #5a6484;
-  --faint: #94a0bc;
+  --text: #101828;
+  --muted: #667085;
+  --faint: #98a2b3;
 
   /* Semantic */
   --success: #09b46e;
@@ -23,9 +23,9 @@
 
   /* Accent */
   --accent: #2563eb;
-  --accent-hover: #1d4ed8;
-  --accent-soft: rgba(37, 99, 235, 0.10);
-  --accent-glow: rgba(37, 99, 235, 0.30);
+  --accent-hover: #175cd3;
+  --accent-soft: rgba(37, 99, 235, 0.09);
+  --accent-glow: rgba(37, 99, 235, 0.25);
 
   /* Bubbles */
   --me: #1e40af;
@@ -34,18 +34,18 @@
   --other-text: #0e1528;
 
   /* Radii */
-  --radius-window: 18px;
-  --radius-card: 13px;
-  --radius-input: 14px;
+  --radius-window: 8px;
+  --radius-card: 8px;
+  --radius-input: 8px;
   --radius-pill: 999px;
 
   /* Shadows */
   --shadow-window:
-    0 28px 80px rgba(14, 21, 40, 0.16),
-    0 4px 20px rgba(14, 21, 40, 0.08);
+    0 16px 40px rgba(14, 21, 40, 0.12),
+    0 2px 8px rgba(14, 21, 40, 0.06);
   --shadow-card:
-    0 8px 28px rgba(14, 21, 40, 0.07),
-    0 1px 3px rgba(14, 21, 40, 0.05);
+    0 3px 12px rgba(14, 21, 40, 0.05),
+    0 1px 2px rgba(14, 21, 40, 0.04);
   --shadow-pill:
     0 18px 48px rgba(14, 21, 40, 0.13),
     0 2px 8px rgba(14, 21, 40, 0.08);

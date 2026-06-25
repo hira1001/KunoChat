@@ -22,14 +22,14 @@ export function AttachmentPreview({ attachments, onRemove }: AttachmentPreviewPr
         {visible.map((attachment) => (
           <div
             key={attachment.id}
-            className="kuno-message-enter group relative flex h-[84px] w-[88px] shrink-0 flex-col justify-end overflow-hidden rounded-[12px] border border-border bg-surface shadow-card transition-all duration-200 hover:border-border-strong hover:shadow-window"
+            className="kuno-message-enter group relative flex h-[84px] w-[88px] shrink-0 flex-col justify-end overflow-hidden rounded-card border border-border bg-surface shadow-card transition-all duration-200 hover:border-border-strong hover:shadow-window"
           >
             {/* Remove button */}
             <button
               type="button"
               aria-label={`${attachment.name}を削除`}
               onClick={() => onRemove(attachment.id)}
-              className="kuno-focus-ring absolute right-1 top-1 z-10 grid h-5 w-5 place-items-center rounded-full bg-white/90 text-muted opacity-0 shadow-card backdrop-blur-sm transition-all duration-150 group-hover:opacity-100 hover:bg-danger hover:text-white active:scale-90 dark:bg-surface"
+              className="kuno-focus-ring absolute right-1 top-1 z-10 grid h-5 w-5 place-items-center rounded-full bg-white/90 text-muted shadow-card backdrop-blur-sm transition-all duration-150 hover:bg-danger hover:text-white active:scale-90 dark:bg-surface"
             >
               <X className="h-3 w-3" />
             </button>
@@ -64,7 +64,7 @@ export function AttachmentPreview({ attachments, onRemove }: AttachmentPreviewPr
 
         {/* Remaining overflow badge */}
         {remaining > 0 ? (
-          <div className="flex h-[84px] w-[88px] shrink-0 items-center justify-center rounded-[12px] border border-dashed border-border bg-surface text-[12px] font-semibold text-muted">
+          <div className="flex h-[84px] w-[88px] shrink-0 items-center justify-center rounded-card border border-dashed border-border bg-surface text-[12px] font-semibold text-muted">
             +{remaining}
           </div>
         ) : null}

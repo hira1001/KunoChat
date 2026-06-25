@@ -20,7 +20,7 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
   const isDownloadPending = status === "queued" && Boolean(onDownload);
 
   return (
-    <div className="group w-full min-w-0 max-w-full overflow-hidden rounded-[13px] border border-border bg-surface shadow-card transition-all duration-200 hover:shadow-window">
+    <div className="group w-full min-w-0 max-w-full overflow-hidden rounded-card border border-border bg-surface shadow-card transition-all duration-200 hover:shadow-window">
       {/* Image preview */}
       <div className="relative aspect-[2.55] overflow-hidden bg-surface-active">
         {asset.previewUrl || asset.thumbnail ? (
@@ -53,7 +53,7 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
               type="button"
               aria-label="画像ダウンロードを開始"
               onClick={onDownload}
-              className="kuno-focus-ring flex items-center gap-1.5 rounded-pill border border-accent bg-accent px-3.5 py-1.5 text-[11px] font-bold text-white shadow-lg transition-all duration-150 hover:bg-accent-hover hover:scale-105 active:scale-95"
+              className="kuno-focus-ring flex items-center gap-1.5 rounded-input border border-accent bg-accent px-3.5 py-1.5 text-[11px] font-bold text-white shadow-lg transition-all duration-150 hover:bg-accent-hover hover:scale-105 active:scale-95"
             >
               <Play className="h-3.5 w-3.5 fill-current" />
               Download ({formatBytes(asset.size)})

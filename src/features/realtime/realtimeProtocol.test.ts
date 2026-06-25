@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { decodeBinaryChunk, encodeBinaryChunk } from "./realtimeClient";
+import { buildIdentityChallenge, decodeBinaryChunk, encodeBinaryChunk } from "./realtimeClient";
 
 function bytes(values: number[]) {
   return new Uint8Array(values).buffer;
@@ -54,5 +54,36 @@ describe("binary channel chunk framing", () => {
   test("rejects a frame whose declared id exceeds its bytes", () => {
     const frame = new Uint8Array([0, 8, 1, 2]).buffer;
     expect(() => decodeBinaryChunk(frame)).toThrow("invalid id length");
+  });
+});
+
+describe("device identity challenges", () => {
+  test("binds the room, both peer ids, keys, and nonces", () => {
+    expect(
+      buildIdentityChallenge({
+        roomId: "123456",
+        senderId: "peer_sender",
+        senderPublicKey: "a".repeat(64),
+        recipientId: "peer_recipient",
+        recipientPublicKey: "b".repeat(64),
+        senderNonce: "c".repeat(64),
+        recipientNonce: "d".repeat(64)
+      })
+    ).toBe(
+      `KunoChat/auth/v1|123456|peer_sender|${"a".repeat(64)}|peer_recipient|${"b".repeat(64)}|${"c".repeat(64)}|${"d".repeat(64)}`
+    );
+  });
+
+  test("changes when the intended recipient changes", () => {
+    const base = {
+      roomId: "123456",
+      senderId: "peer_sender",
+      senderPublicKey: "a".repeat(64),
+      recipientId: "peer_recipient",
+      recipientPublicKey: "b".repeat(64),
+      senderNonce: "c".repeat(64),
+      recipientNonce: "d".repeat(64)
+    };
+    expect(buildIdentityChallenge(base)).not.toBe(buildIdentityChallenge({ ...base, recipientId: "peer_other" }));
   });
 });

@@ -47,7 +47,7 @@ export function FileCard({ asset, status, progress, error, speed, eta, onPause, 
   return (
     <div
       className={clsx(
-        "relative w-full min-w-0 max-w-full overflow-hidden rounded-[13px] border bg-surface p-3 shadow-card transition-all duration-300",
+        "relative w-full min-w-0 max-w-full overflow-hidden rounded-card border bg-surface p-3 shadow-card transition-all duration-300",
         isDone
           ? "border-success/30 kuno-success-flash"
           : failed
@@ -68,7 +68,7 @@ export function FileCard({ asset, status, progress, error, speed, eta, onPause, 
           {/* File type badge */}
           <div
             className={clsx(
-              "relative grid h-10 w-10 shrink-0 place-items-center rounded-[9px] text-[9px] font-bold text-white shadow-sm transition-transform duration-200",
+              "relative grid h-10 w-10 shrink-0 place-items-center rounded-[7px] text-[9px] font-bold text-white shadow-sm transition-transform duration-200",
               color,
               isActive && "animate-pulse"
             )}
@@ -111,7 +111,7 @@ export function FileCard({ asset, status, progress, error, speed, eta, onPause, 
                 type="button"
                 aria-label={failed ? "転送を再開" : "ダウンロードを開始"}
                 onClick={onDownload}
-                className="kuno-focus-ring flex items-center gap-1 rounded-pill border border-accent bg-accent px-2.5 py-1 text-[11px] font-bold text-white shadow-sm transition-all duration-150 hover:bg-accent-hover active:scale-95"
+                className="kuno-focus-ring flex items-center gap-1 rounded-input border border-accent bg-accent px-2.5 py-1 text-[11px] font-bold text-white shadow-sm transition-all duration-150 hover:bg-accent-hover active:scale-95"
               >
                 <Play className="h-3 w-3 fill-current" />
                 {failed ? "Resume" : "Download"}

@@ -148,6 +148,14 @@ Each entry should include:
 - Possible impact on other OS: Shared React/realtime behavior. Both Windows and macOS should update to `v0.3.6` before file-transfer verification.
 - Follow-up: Publish `v0.3.6`, update both installed apps, then retry text plus file transfer.
 
+### 2026-06-27 20:25 JST - Windows
+
+- Branch: `main`
+- Summary: Published `v0.3.6` and updated the Windows installed app.
+- Verified: GitHub Release `v0.3.6` completed successfully with Windows and macOS assets plus `latest.json`. Windows was updated with `KunoChat_0.3.6_x64-setup.exe`; `C:\Users\ymy26\AppData\Local\KunoChat\kunochat.exe` reports `ProductVersion` and `FileVersion` `0.3.6`.
+- Possible impact on other OS: macOS must also update to `v0.3.6` because the auto-start file receive fix runs on the receiver side.
+- Follow-up: Update macOS to `v0.3.6`, reconnect, and retry sending a new file. Previously cancelled transfer cards can be ignored or retried after both sides are updated.
+
 ## Current Work
 
 ### Windows Codex

@@ -60,14 +60,22 @@ Each entry should include:
 - Possible impact on other OS: None from this doc-only note. Windows should install `KunoChat_0.3.1_x64-setup.exe` and verify pairing against the same release.
 - Follow-up: If pairing remains stuck, use Settings -> Pairing -> Forget paired peer on both machines, then pair again so regenerated device keys are trusted.
 
+### 2026-06-27 12:35 JST - Windows
+
+- Branch: `main`
+- Summary: Verified the installed Windows app `KunoChat` from `C:\Users\ymy26\AppData\Local\KunoChat\kunochat.exe`.
+- Verified: The installed app is registered as `com.kunochat.desktop`, launches, renders the main window, and opens the Settings screen. The Settings screen shows profile, save folder, Always on top, Launch at login, Notifications, and Sound controls.
+- Possible impact on other OS: Current Windows state shows `接続できません / The remote device could not prove its identity.`, so pairing trust may need to be reset on both Windows and macOS before cross-OS message/file transfer verification.
+- Follow-up: Use Settings -> Pairing -> Forget paired peer on both machines, then pair again and verify message/file transfer between Windows and macOS.
+
 ## Current Work
 
 ### Windows Codex
 
 - Branch: `codex/windows`
-- Current task:
-- Status:
-- Blockers:
+- Current task: Windows installed-app verification.
+- Status: App launch and Settings screen verified. Pairing/message transfer not yet verified due to remote identity trust error.
+- Blockers: Needs paired macOS device reset/re-pairing to continue cross-OS transfer verification.
 
 ### macOS Codex
 

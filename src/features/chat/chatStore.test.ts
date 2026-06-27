@@ -372,6 +372,17 @@ describe("chatStore", () => {
     expect(useChatStore.getState().transferStates.tr_1).toMatchObject({ status: "queued", progress: 0 });
   });
 
+  test("resets a cancelled incoming asset when the peer retries the same message", () => {
+    const input = { id: "asset_msg", transferId: "tr_1", senderId: "peer", senderName: "Taro", createdAt: 1, kind: "file" as const, name: "a.pdf", size: 42, mime: "application/pdf" };
+    useChatStore.getState().receivePeerAsset(input);
+    useChatStore.getState().cancelTransfer({ messageId: "asset_msg", transferId: "tr_1", message: "cancelled" });
+
+    useChatStore.getState().receivePeerAsset(input);
+
+    expect(useChatStore.getState().messages[0]).toMatchObject({ status: "queued", progress: 0, error: undefined });
+    expect(useChatStore.getState().transferStates.tr_1).toMatchObject({ status: "queued", progress: 0 });
+  });
+
   test("updates settings without dropping existing values", () => {
     useChatStore.getState().updateSettings({ displayName: "Ren" });
     expect(useChatStore.getState().settings).toMatchObject({ displayName: "Ren", saveFolder: "~/Downloads/KunoChat" });

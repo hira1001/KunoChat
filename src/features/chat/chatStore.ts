@@ -247,6 +247,7 @@ export const useChatStore = create<ChatStore>()(
           if (
             existingMessage &&
             existingMessage.status !== "failed" &&
+            existingMessage.status !== "cancelled" &&
             existingMessage.status !== "queued" &&
             existingMessage.status !== "receiving"
           ) {

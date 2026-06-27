@@ -102,7 +102,7 @@ export function App() {
   const recoveredTransfersRef = useRef(false);
   const recoveryLoadedRef = useRef(false);
   const recoverySessionsRef = useRef<DurableTransferSession[]>([]);
-  const recoveryRequestsRef = useRef(new Set<string>());
+  const incomingRequestsRef = useRef(new Set<string>());
   const typingStopTimerRef = useRef<number>();
   const settingsRef = useRef(settings);
   const windowFocusedRef = useRef(typeof document === "undefined" ? true : document.hasFocus());
@@ -254,9 +254,6 @@ export function App() {
       },
       onAssetStart: (asset) => {
         const isNewMessage = !useChatStore.getState().messages.some((message) => message.id === asset.messageId);
-        const shouldResume = recoverySessionsRef.current.some(
-          (session) => session.direction === "incoming" && session.transferId === asset.transferId
-        );
         receivePeerAsset({
           id: asset.messageId,
           transferId: asset.transferId,
@@ -274,12 +271,11 @@ export function App() {
         if (isNewMessage) {
           void notifyIncoming(`${asset.senderName} sent a file`, asset.name);
         }
-        if (shouldResume && !recoveryRequestsRef.current.has(asset.transferId)) {
-          recoveryRequestsRef.current.add(asset.transferId);
+        if (!incomingRequestsRef.current.has(asset.transferId)) {
+          incomingRequestsRef.current.add(asset.transferId);
           window.setTimeout(() => {
             const state = useChatStore.getState();
-            state.markMessageStatus(asset.messageId, "receiving");
-            realtimeClient.requestTransfer(asset.messageId, asset.transferId);
+            state.requestDownload(asset.messageId);
           }, 0);
         }
       },

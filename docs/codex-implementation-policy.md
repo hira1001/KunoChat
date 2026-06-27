@@ -140,6 +140,14 @@ Each entry should include:
 - Possible impact on other OS: macOS must also update to `v0.3.5`; `v0.3.4` peers still expect identity proof and will not complete pairing with the new hello-only handshake.
 - Follow-up: Update macOS to `v0.3.5`, then retry pairing. If it still fails, capture the exact banner text after both sides are on `v0.3.5`.
 
+### 2026-06-27 20:07 JST - Windows
+
+- Branch: `main`
+- Summary: Fixed file sending so incoming files are requested automatically when `asset-start` arrives instead of waiting for the receiver to press Download.
+- Verified: Windows `v0.3.5` was connected and text messages worked, but the sent file stayed/collapsed into a cancelled state. Code review showed new incoming assets were queued and only recovery sessions called `requestTransfer`; `v0.3.6` now calls `requestDownload` for each new incoming transfer and also allows cancelled incoming assets to reset when the peer retries.
+- Possible impact on other OS: Shared React/realtime behavior. Both Windows and macOS should update to `v0.3.6` before file-transfer verification.
+- Follow-up: Publish `v0.3.6`, update both installed apps, then retry text plus file transfer.
+
 ## Current Work
 
 ### Windows Codex

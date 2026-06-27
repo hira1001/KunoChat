@@ -2529,7 +2529,7 @@ dependencies = [
 
 [[package]]
 name = "kunochat"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "chacha20poly1305",
  "dirs 5.0.1",

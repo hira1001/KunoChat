@@ -434,7 +434,9 @@ export function App() {
           title: `${sourceLabel}でKunoChatを検出`,
           detail: `${event.payload.peerHint} と接続を準備しています。`
         });
-        setView("main");
+        if (state.currentView === "pairing") {
+          setView("main");
+        }
         void realtimeClient.connect({
           roomId: event.payload.roomId,
           localPeerId: sessionPeerId,

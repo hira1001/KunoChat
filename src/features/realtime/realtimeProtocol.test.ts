@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildIdentityChallenge, decodeBinaryChunk, encodeBinaryChunk, identityHelloChanged } from "./realtimeClient";
+import { decodeBinaryChunk, encodeBinaryChunk, identityHelloChanged } from "./realtimeClient";
 
 function bytes(values: number[]) {
   return new Uint8Array(values).buffer;
@@ -57,37 +57,8 @@ describe("binary channel chunk framing", () => {
   });
 });
 
-describe("device identity challenges", () => {
-  test("binds the room, both peer ids, keys, and nonces", () => {
-    expect(
-      buildIdentityChallenge({
-        roomId: "123456",
-        senderId: "peer_sender",
-        senderPublicKey: "a".repeat(64),
-        recipientId: "peer_recipient",
-        recipientPublicKey: "b".repeat(64),
-        senderNonce: "c".repeat(64),
-        recipientNonce: "d".repeat(64)
-      })
-    ).toBe(
-      `KunoChat/auth/v1|123456|peer_sender|${"a".repeat(64)}|peer_recipient|${"b".repeat(64)}|${"c".repeat(64)}|${"d".repeat(64)}`
-    );
-  });
-
-  test("changes when the intended recipient changes", () => {
-    const base = {
-      roomId: "123456",
-      senderId: "peer_sender",
-      senderPublicKey: "a".repeat(64),
-      recipientId: "peer_recipient",
-      recipientPublicKey: "b".repeat(64),
-      senderNonce: "c".repeat(64),
-      recipientNonce: "d".repeat(64)
-    };
-    expect(buildIdentityChallenge(base)).not.toBe(buildIdentityChallenge({ ...base, recipientId: "peer_other" }));
-  });
-
-  test("rejects nonce changes for the same remote identity during a handshake", () => {
+describe("device identity hello handling", () => {
+  test("ignores nonce changes for the same remote identity", () => {
     const existing = {
       senderId: "peer_sender",
       publicKey: "a".repeat(64),
@@ -95,7 +66,7 @@ describe("device identity challenges", () => {
     };
 
     expect(identityHelloChanged(existing, existing)).toBe("same");
-    expect(identityHelloChanged(existing, { ...existing, nonce: "c".repeat(64) })).toBe("nonce");
+    expect(identityHelloChanged(existing, { ...existing, nonce: "c".repeat(64) })).toBe("same");
   });
 
   test("distinguishes a changed remote identity from a replayed hello", () => {

@@ -124,6 +124,14 @@ Each entry should include:
 - Possible impact on other OS: Windows is now on `v0.3.4`; macOS should also update to `v0.3.4` before cross-OS pairing is judged again.
 - Follow-up: Re-test Windows/macOS pairing and confirm the stale identity proof failure no longer appears after both sides are on `v0.3.4`.
 
+### 2026-06-27 19:17 JST - Windows
+
+- Branch: `main`
+- Summary: Removed device signature proof from realtime pairing for `v0.3.5`; pairing now accepts the remote `identity-hello` public key/fingerprint and only checks an already saved trusted peer for mismatch.
+- Verified: `npm run typecheck`, `npm test` (165 passed), `npm run build`, and `node scripts/release-preflight.mjs --tag v0.3.5` passed locally.
+- Possible impact on other OS: Both Windows and macOS must update to `v0.3.5`; mixed `v0.3.4`/`v0.3.5` clients are not expected to complete pairing because `v0.3.4` still waits for an identity proof.
+- Follow-up: Publish `v0.3.5`, update both installed apps, then retry pairing. If a paired-device mismatch appears, use Settings -> Pairing -> Forget paired peer on the affected machine.
+
 ## Current Work
 
 ### Windows Codex

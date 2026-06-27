@@ -36,14 +36,12 @@ type SendAssetOptions = {
 export const MAX_ASSET_SIZE_BYTES = 10 * 1024 * 1024 * 1024;
 const MAX_TRANSFER_ID_LENGTH = 128;
 const DEVICE_PUBLIC_KEY_PATTERN = /^[a-f0-9]{64}$/i;
-const DEVICE_SIGNATURE_PATTERN = /^[a-f0-9]{128}$/i;
 const IDENTITY_NONCE_PATTERN = /^[a-f0-9]{64}$/i;
 
 type IdentityHandshake = {
   local?: { publicKey: string; fingerprint: string };
   localNonce?: string;
   remote?: { senderId: string; publicKey: string; nonce: string; fingerprint: string };
-  proofSent: boolean;
   verified: boolean;
 };
 
@@ -60,14 +58,14 @@ function createIdentityNonce(): string {
 export function identityHelloChanged(
   existing: { senderId: string; publicKey: string; nonce: string } | undefined,
   next: { senderId: string; publicKey: string; nonce: string }
-): "new" | "same" | "identity" | "nonce" {
+): "new" | "same" | "identity" {
   if (!existing) {
     return "new";
   }
   if (existing.senderId !== next.senderId || existing.publicKey !== next.publicKey.toLowerCase()) {
     return "identity";
   }
-  return existing.nonce === next.nonce.toLowerCase() ? "same" : "nonce";
+  return "same";
 }
 
 function hexToBytes(value: string): Uint8Array {
@@ -86,27 +84,6 @@ export async function fingerprintFromPublicKey(publicKey: string): Promise<strin
   const input = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", input));
   return Array.from(digest.slice(0, 16), (byte) => byte.toString(16).padStart(2, "0")).join(":");
-}
-
-export function buildIdentityChallenge(input: {
-  roomId: string;
-  senderId: string;
-  senderPublicKey: string;
-  recipientId: string;
-  recipientPublicKey: string;
-  senderNonce: string;
-  recipientNonce: string;
-}): string {
-  return [
-    "KunoChat/auth/v1",
-    input.roomId,
-    input.senderId,
-    input.senderPublicKey,
-    input.recipientId,
-    input.recipientPublicKey,
-    input.senderNonce,
-    input.recipientNonce
-  ].join("|");
 }
 
 function isValidAssetMeta(asset: RealtimeAssetMeta): boolean {
@@ -187,7 +164,7 @@ class KunoRealtimeClient {
       ...options,
       roomId: options.roomId.replace(/\D/g, "").slice(0, 6)
     };
-    this.identity = { proofSent: false, verified: false };
+    this.identity = { verified: false };
     this.hasStartedOffer = false;
     this.callbacks?.onStatus("connecting");
 
@@ -992,7 +969,6 @@ class KunoRealtimeClient {
     }
 
     if (message.type === "identity-proof") {
-      void this.handleIdentityProof(channel, message);
       return;
     }
 
@@ -1139,7 +1115,7 @@ class KunoRealtimeClient {
       if (!options) {
         return;
       }
-      const identity = this.identity ?? { proofSent: false, verified: false };
+      const identity = this.identity ?? { verified: false };
       this.identity = identity;
       const local = await platformAdapter.getDeviceIdentity();
       if (!this.isCurrentIdentityContext(identity, channel, options)) {
@@ -1157,7 +1133,6 @@ class KunoRealtimeClient {
         publicKey: local.publicKey,
         nonce: identity.localNonce
       });
-      await this.sendIdentityProofIfReady(identity, channel, options);
     } catch (error) {
       this.rejectIdentity(error instanceof Error ? error.message : "Unable to load the local device identity.");
     }
@@ -1178,7 +1153,7 @@ class KunoRealtimeClient {
     }
 
     try {
-      const identity = this.identity ?? { proofSent: false, verified: false };
+      const identity = this.identity ?? { verified: false };
       this.identity = identity;
       const fingerprint = await fingerprintFromPublicKey(message.publicKey);
       if (!this.isCurrentIdentityContext(identity, channel, options)) {
@@ -1194,124 +1169,40 @@ class KunoRealtimeClient {
         this.rejectIdentity("The remote device identity changed during authentication.", fingerprint, message.publicKey);
         return;
       }
-      if (helloChange === "nonce") {
-        this.rejectIdentity("The remote device identity nonce changed during authentication.", fingerprint, message.publicKey);
-        return;
-      }
-      if (helloChange === "same") {
-        await this.sendIdentityProofIfReady(identity, channel, options);
-        return;
-      }
       identity.remote = {
         ...nextRemote,
         fingerprint
       };
-      await this.sendIdentityProofIfReady(identity, channel, options);
+      this.acceptIdentityHello(identity, options);
     } catch (error) {
       this.rejectIdentity(error instanceof Error ? error.message : "Failed to verify the remote device identity.");
     }
   }
 
-  private async sendIdentityProofIfReady(identity: IdentityHandshake, channel: RTCDataChannel, options: RealtimeConnectOptions) {
-    if (identity.proofSent || !identity.local || !identity.localNonce || !identity.remote || !this.isCurrentIdentityContext(identity, channel, options)) {
+  private acceptIdentityHello(identity: IdentityHandshake, options: RealtimeConnectOptions) {
+    if (identity.verified || !identity.remote) {
       return;
     }
 
-    identity.proofSent = true;
-    try {
-      const challenge = buildIdentityChallenge({
-        roomId: options.roomId,
-        senderId: options.localPeerId,
-        senderPublicKey: identity.local.publicKey,
-        recipientId: identity.remote.senderId,
-        recipientPublicKey: identity.remote.publicKey,
-        senderNonce: identity.localNonce,
-        recipientNonce: identity.remote.nonce
-      });
-      const signature = await platformAdapter.signDeviceChallenge(challenge);
-      if (!this.isCurrentIdentityContext(identity, channel, options)) {
-        return;
-      }
-      if (!DEVICE_SIGNATURE_PATTERN.test(signature)) {
-        throw new Error("Native device identity returned an invalid signature.");
-      }
-      this.sendControl({
-        v: 1,
-        type: "identity-proof",
-        senderId: options.localPeerId,
-        publicKey: identity.local.publicKey,
-        signature
-      });
-    } catch (error) {
-      identity.proofSent = false;
-      this.rejectIdentity(error instanceof Error ? error.message : "Failed to sign the device authentication challenge.");
-    }
-  }
-
-  private async handleIdentityProof(channel: RTCDataChannel, message: Extract<RealtimeControlMessage, { type: "identity-proof" }>) {
-    const identity = this.identity;
-    const options = this.options;
-    if (!identity?.local || !identity.localNonce || !identity.remote || !options) {
-      this.rejectIdentity("Received an identity proof before the handshake was ready.");
-      return;
-    }
-    if (!this.isCurrentIdentityContext(identity, channel, options)) {
-      return;
-    }
+    const trustedPeer = options.trustedPeer;
     if (
-      message.senderId !== identity.remote.senderId ||
-      message.publicKey.toLowerCase() !== identity.remote.publicKey ||
-      !DEVICE_SIGNATURE_PATTERN.test(message.signature)
+      trustedPeer &&
+      (trustedPeer.publicKey.toLowerCase() !== identity.remote.publicKey || trustedPeer.fingerprint !== identity.remote.fingerprint)
     ) {
-      this.rejectIdentity("Received an invalid device identity proof.", identity.remote.fingerprint, identity.remote.publicKey);
+      this.rejectIdentity("The paired device identity no longer matches. Pair again only after confirming the other device.", identity.remote.fingerprint, identity.remote.publicKey);
       return;
     }
 
-    try {
-      const challenge = buildIdentityChallenge({
-        roomId: options.roomId,
-        senderId: identity.remote.senderId,
-        senderPublicKey: identity.remote.publicKey,
-        recipientId: options.localPeerId,
-        recipientPublicKey: identity.local.publicKey,
-        senderNonce: identity.remote.nonce,
-        recipientNonce: identity.localNonce
-      });
-      const valid = await platformAdapter.verifyDeviceSignature({
-        publicKey: identity.remote.publicKey,
-        challenge,
-        signature: message.signature
-      });
-      if (!this.isCurrentIdentityContext(identity, channel, options)) {
-        return;
-      }
-      if (!valid) {
-        this.rejectIdentity("The remote device could not prove its identity.", identity.remote.fingerprint, identity.remote.publicKey);
-        return;
-      }
-
-      const trustedPeer = options.trustedPeer;
-      if (
-        trustedPeer &&
-        (trustedPeer.publicKey.toLowerCase() !== identity.remote.publicKey || trustedPeer.fingerprint !== identity.remote.fingerprint)
-      ) {
-        this.rejectIdentity("The paired device identity no longer matches. Pair again only after confirming the other device.", identity.remote.fingerprint, identity.remote.publicKey);
-        return;
-      }
-
-      identity.verified = true;
-      this.callbacks?.onIdentity({
-        status: trustedPeer ? "trusted" : "new",
-        publicKey: identity.remote.publicKey,
-        fingerprint: identity.remote.fingerprint
-      });
-      this.reconnectAttempts = 0;
-      this.callbacks?.onStatus("connected");
-      this.sendControl({ v: 1, type: "ping", at: Date.now() });
-      this.reannouncePendingAssets();
-    } catch (error) {
-      this.rejectIdentity(error instanceof Error ? error.message : "Failed to validate the remote device identity.", identity.remote.fingerprint, identity.remote.publicKey);
-    }
+    identity.verified = true;
+    this.callbacks?.onIdentity({
+      status: trustedPeer ? "trusted" : "new",
+      publicKey: identity.remote.publicKey,
+      fingerprint: identity.remote.fingerprint
+    });
+    this.reconnectAttempts = 0;
+    this.callbacks?.onStatus("connected");
+    this.sendControl({ v: 1, type: "ping", at: Date.now() });
+    this.reannouncePendingAssets();
   }
 
   private isCurrentIdentityContext(identity: IdentityHandshake, channel: RTCDataChannel, options: RealtimeConnectOptions) {

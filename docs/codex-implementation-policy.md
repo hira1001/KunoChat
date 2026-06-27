@@ -132,6 +132,14 @@ Each entry should include:
 - Possible impact on other OS: Both Windows and macOS must update to `v0.3.5`; mixed `v0.3.4`/`v0.3.5` clients are not expected to complete pairing because `v0.3.4` still waits for an identity proof.
 - Follow-up: Publish `v0.3.5`, update both installed apps, then retry pairing. If a paired-device mismatch appears, use Settings -> Pairing -> Forget paired peer on the affected machine.
 
+### 2026-06-27 19:57 JST - Windows
+
+- Branch: `main`
+- Summary: Published `v0.3.5` after rerunning a transient Windows CI dependency-download failure, then updated the running Windows app through Settings -> App update.
+- Verified: GitHub Release `v0.3.5` is public with Windows and macOS assets plus `latest.json`. Windows `C:\Users\ymy26\AppData\Local\KunoChat\kunochat.exe` reports `ProductVersion` and `FileVersion` `0.3.5`, and the running app shows pairing standby with LAN peer `192.168.64.51`.
+- Possible impact on other OS: macOS must also update to `v0.3.5`; `v0.3.4` peers still expect identity proof and will not complete pairing with the new hello-only handshake.
+- Follow-up: Update macOS to `v0.3.5`, then retry pairing. If it still fails, capture the exact banner text after both sides are on `v0.3.5`.
+
 ## Current Work
 
 ### Windows Codex

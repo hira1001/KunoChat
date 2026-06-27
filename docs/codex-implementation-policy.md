@@ -100,6 +100,14 @@ Each entry should include:
 - Possible impact on other OS: Windows and macOS should both install the `v0.3.2` artifacts before retrying pairing, otherwise one side may still run the old unordered identity handshake.
 - Follow-up: Install `v0.3.2` on both machines and re-run cross-OS text/file transfer verification.
 
+### 2026-06-27 17:39 JST - macOS
+
+- Branch: `main`
+- Summary: Replaced the installed macOS app with the latest published `v0.3.3` release from `KunoChat_0.3.3_universal.dmg`.
+- Verified: `/Applications/KunoChat.app` reports `0.3.3`, launches from `/Applications`, renders the main window with native macOS chrome, and listens on TCP `8787` and `8790`.
+- Possible impact on other OS: Windows should also install `KunoChat_0.3.3_x64-setup.exe` before cross-OS verification so both sides run the same shared realtime code.
+- Follow-up: Pair macOS `v0.3.3` with Windows `v0.3.3`, then verify text send, typing indicator, file transfer, reconnect, and peer-forget recovery.
+
 ## Current Work
 
 ### Windows Codex
@@ -111,10 +119,10 @@ Each entry should include:
 
 ### macOS Codex
 
-- Branch: `codex/macos`
-- Current task:
-- Status:
-- Blockers:
+- Branch: `main`
+- Current task: macOS installed-app verification for latest release.
+- Status: `v0.3.3` is installed in `/Applications/KunoChat.app`, launched, and listening on TCP `8787`/`8790`. The app is currently waiting for pairing.
+- Blockers: Cross-OS transfer verification still requires Windows to install and run `v0.3.3`.
 
 ## Merge Expectations
 

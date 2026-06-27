@@ -76,13 +76,21 @@ Each entry should include:
 - Possible impact on other OS: Both Windows and macOS can hit this during LAN auto-connect/reconnect races, especially when discovery emits a new connection attempt while authentication messages are still in flight.
 - Follow-up: Make the identity handshake deterministic by using an ordered control channel and by treating a changed nonce during the same authentication attempt as stale/invalid instead of overwriting it. Then rebuild/install both OS releases and retry pairing.
 
+### 2026-06-27 12:40 JST - Windows
+
+- Branch: `main`
+- Summary: Re-ran installed Windows app verification after pulling latest `main`.
+- Verified: Installed `KunoChat` is still version `0.3.1` at `C:\Users\ymy26\AppData\Local\KunoChat\kunochat.exe`, launches as `com.kunochat.desktop`, and listens on TCP `8787`/`8790` plus UDP `8788`. The main window still shows `接続できません / The remote device could not prove its identity.` Pressing `Retry` leaves the app in the same failed state.
+- Possible impact on other OS: Confirms the installed Windows release has not received the handshake fix yet. macOS should not expect cross-OS transfer verification to pass against this Windows build.
+- Follow-up: Implement the handshake fix, rebuild/install the Windows app, then repeat the same installed-app check and cross-OS pairing test.
+
 ## Current Work
 
 ### Windows Codex
 
 - Branch: `codex/windows`
 - Current task: Windows installed-app verification.
-- Status: App launch and Settings screen verified. Root cause investigation points to identity nonce overwrite / unordered control-channel race, not stale trusted-peer storage.
+- Status: Re-verified installed Windows `0.3.1`; Retry still fails with remote identity proof error. Root cause remains identity nonce overwrite / unordered control-channel race, not stale trusted-peer storage.
 - Blockers: Needs handshake fix, rebuild, reinstall on both OSes, then cross-OS transfer verification.
 
 ### macOS Codex

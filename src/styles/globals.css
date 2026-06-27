@@ -1,0 +1,282 @@
+@import "./tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Reset & base ─── */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  min-height: 100%;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+body {
+  overflow: hidden;
+  color: var(--text);
+  font-family:
+    "Outfit",
+    "Hiragino Sans",
+    "Yu Gothic",
+    "Noto Sans JP",
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-feature-settings: "kern" 1, "liga" 1;
+  letter-spacing: 0;
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
+  transition: background 0.3s var(--ease-smooth), color 0.3s var(--ease-smooth);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: default;
+}
+
+textarea {
+  resize: none;
+}
+
+img,
+video,
+canvas,
+svg {
+  max-width: 100%;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* ─── Focus ring ─── */
+.kuno-focus-ring {
+  outline: none;
+}
+
+.kuno-focus-ring:focus-visible {
+  box-shadow:
+    0 0 0 2px var(--bg),
+    0 0 0 4px var(--accent-glow);
+}
+
+/* ─── Scrollbar ─── */
+.kuno-scrollbar {
+  scrollbar-width: none;
+}
+
+.kuno-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ─── Glass surface ─── */
+.kuno-glass {
+  background: var(--bg-glass);
+  backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  border: 1px solid var(--border);
+}
+
+.kuno-brand-mark {
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 7px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+}
+
+.kuno-brand-mark img {
+  transform: scale(1.12);
+}
+
+/* ─── Message enter animation ─── */
+.kuno-message-enter {
+  animation: kuno-message-in 200ms var(--ease-spring) both;
+}
+
+@keyframes kuno-message-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ─── Screen slide animations ─── */
+.kuno-screen-enter {
+  animation: kuno-screen-in 240ms var(--ease-spring) both;
+}
+
+.kuno-screen-exit {
+  animation: kuno-screen-out 200ms var(--ease-smooth) both;
+}
+
+@keyframes kuno-screen-in {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes kuno-screen-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+
+/* ─── Fade animations ─── */
+.kuno-fade-in {
+  animation: kuno-fade 200ms var(--ease-out) both;
+}
+
+@keyframes kuno-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ─── Shell expand animation ─── */
+.kuno-shell-expand {
+  animation: kuno-expand 280ms var(--ease-spring) both;
+}
+
+@keyframes kuno-expand {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* ─── Status pulse ─── */
+.kuno-pulse-connected {
+  animation: kuno-pulse-green 2.4s ease-in-out infinite;
+}
+
+.kuno-pulse-warning {
+  animation: kuno-pulse-amber 1.6s ease-in-out infinite;
+}
+
+@keyframes kuno-pulse-green {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(9, 180, 110, 0.55); }
+  50%       { box-shadow: 0 0 0 5px rgba(9, 180, 110, 0); }
+}
+
+@keyframes kuno-pulse-amber {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.55); }
+  50%       { box-shadow: 0 0 0 4px rgba(245, 158, 11, 0); }
+}
+
+/* ─── Progress bar shimmer ─── */
+.kuno-progress-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.kuno-progress-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.35) 50%,
+    transparent 100%
+  );
+  animation: kuno-shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes kuno-shimmer {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%); }
+}
+
+/* ─── Success flash ─── */
+.kuno-success-flash {
+  animation: kuno-success 600ms var(--ease-out) both;
+}
+
+@keyframes kuno-success {
+  0%   { background-color: rgba(9, 180, 110, 0.25); }
+  100% { background-color: transparent; }
+}
+
+/* ─── Bounce send button ─── */
+.kuno-send-bounce {
+  animation: kuno-bounce-up 300ms var(--ease-spring) both;
+}
+
+@keyframes kuno-bounce-up {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(0.88); }
+  100% { transform: scale(1); }
+}
+
+/* ─── Typing dots ─── */
+.kuno-dot-pulse {
+  animation: kuno-dot 1.2s ease-in-out infinite both;
+}
+
+.kuno-dot-pulse:nth-child(2) { animation-delay: 0.15s; }
+.kuno-dot-pulse:nth-child(3) { animation-delay: 0.30s; }
+
+@keyframes kuno-dot {
+  0%, 80%, 100% { transform: scale(0.7); opacity: 0.5; }
+  40%           { transform: scale(1.1); opacity: 1; }
+}
+
+/* ─── Drop overlay pulse border ─── */
+.kuno-drop-border {
+  animation: kuno-drop-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes kuno-drop-pulse {
+  0%, 100% { border-color: rgba(37, 99, 235, 0.5); }
+  50%       { border-color: rgba(37, 99, 235, 1); }
+}
+
+/* ─── Reduced motion ─── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+  }
+}

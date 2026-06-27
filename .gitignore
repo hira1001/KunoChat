@@ -1,0 +1,20 @@
+node_modules/
+dist/
+src-tauri/target/
+
+.DS_Store
+*.log
+
+.env
+.env.local
+.env.*.local
+
+artifacts/
+kunochat-ui-screenshot.png
+
+src-tauri/gen/
+
+# Tauri update keys
+kuno_updater.key
+kuno_updater.key.pub
+

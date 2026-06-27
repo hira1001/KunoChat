@@ -1,0 +1,89 @@
+import { describe, expect, test } from "vitest";
+import { buildIdentityChallenge, decodeBinaryChunk, encodeBinaryChunk } from "./realtimeClient";
+
+function bytes(values: number[]) {
+  return new Uint8Array(values).buffer;
+}
+
+describe("binary channel chunk framing", () => {
+  test.each([
+    ["tr_1", [1]],
+    ["transfer-long-id", [1, 2, 3, 4]],
+    ["日本語id", [255, 0, 128]],
+    ["empty-payload", []],
+    ["x".repeat(128), [7, 8, 9]]
+  ])("round-trips transfer id and payload %#", (transferId, payload) => {
+    const decoded = decodeBinaryChunk(encodeBinaryChunk(transferId, bytes(payload)));
+    expect(decoded.transferId).toBe(transferId);
+    expect(Array.from(new Uint8Array(decoded.payload))).toEqual(payload);
+  });
+
+  test("stores id length in the first two bytes", () => {
+    const encoded = encodeBinaryChunk("abc", bytes([1]));
+    expect(new DataView(encoded).getUint16(0)).toBe(3);
+  });
+
+  test("places payload after the id bytes", () => {
+    const encoded = new Uint8Array(encodeBinaryChunk("abc", bytes([9, 10])));
+    expect(Array.from(encoded.slice(5))).toEqual([9, 10]);
+  });
+
+  test("keeps independent frames isolated", () => {
+    const left = decodeBinaryChunk(encodeBinaryChunk("left", bytes([1, 2])));
+    const right = decodeBinaryChunk(encodeBinaryChunk("right", bytes([3, 4])));
+    expect(left.transferId).toBe("left");
+    expect(right.transferId).toBe("right");
+    expect(Array.from(new Uint8Array(left.payload))).toEqual([1, 2]);
+    expect(Array.from(new Uint8Array(right.payload))).toEqual([3, 4]);
+  });
+
+  test("handles binary-like zero bytes", () => {
+    const decoded = decodeBinaryChunk(encodeBinaryChunk("zero", bytes([0, 0, 0])));
+    expect(Array.from(new Uint8Array(decoded.payload))).toEqual([0, 0, 0]);
+  });
+
+  test("handles maximum single-byte values", () => {
+    const decoded = decodeBinaryChunk(encodeBinaryChunk("max", bytes([255, 254, 253])));
+    expect(Array.from(new Uint8Array(decoded.payload))).toEqual([255, 254, 253]);
+  });
+
+  test("rejects a frame without a header", () => {
+    expect(() => decodeBinaryChunk(new ArrayBuffer(1))).toThrow("too short");
+  });
+
+  test("rejects a frame whose declared id exceeds its bytes", () => {
+    const frame = new Uint8Array([0, 8, 1, 2]).buffer;
+    expect(() => decodeBinaryChunk(frame)).toThrow("invalid id length");
+  });
+});
+
+describe("device identity challenges", () => {
+  test("binds the room, both peer ids, keys, and nonces", () => {
+    expect(
+      buildIdentityChallenge({
+        roomId: "123456",
+        senderId: "peer_sender",
+        senderPublicKey: "a".repeat(64),
+        recipientId: "peer_recipient",
+        recipientPublicKey: "b".repeat(64),
+        senderNonce: "c".repeat(64),
+        recipientNonce: "d".repeat(64)
+      })
+    ).toBe(
+      `KunoChat/auth/v1|123456|peer_sender|${"a".repeat(64)}|peer_recipient|${"b".repeat(64)}|${"c".repeat(64)}|${"d".repeat(64)}`
+    );
+  });
+
+  test("changes when the intended recipient changes", () => {
+    const base = {
+      roomId: "123456",
+      senderId: "peer_sender",
+      senderPublicKey: "a".repeat(64),
+      recipientId: "peer_recipient",
+      recipientPublicKey: "b".repeat(64),
+      senderNonce: "c".repeat(64),
+      recipientNonce: "d".repeat(64)
+    };
+    expect(buildIdentityChallenge(base)).not.toBe(buildIdentityChallenge({ ...base, recipientId: "peer_other" }));
+  });
+});

@@ -1,0 +1,166 @@
+import { Check, ChevronLeft, Copy, Loader2, ShieldCheck, Wifi, WifiOff } from "lucide-react";
+import clsx from "clsx";
+import { useState, type FormEvent } from "react";
+import type { ConnectionStatus } from "../features/chat/messageTypes";
+import { BrandMark } from "./BrandMark";
+
+type PairingScreenProps = {
+  status: ConnectionStatus;
+  signalingConfigured: boolean;
+  pairingCode: string;
+  signalingUrl: string;
+  displayName: string;
+  peerDisplayName?: string;
+  onBack: () => void;
+  onConnect: (friendCode: string) => void;
+};
+
+export function PairingScreen({
+  status,
+  signalingConfigured,
+  pairingCode,
+  signalingUrl,
+  displayName,
+  peerDisplayName,
+  onBack,
+  onConnect
+}: PairingScreenProps) {
+  const [friendCode, setFriendCode] = useState("");
+  const [copied, setCopied] = useState(false);
+  const canConnect = friendCode.replace(/\D/g, "").length === 6;
+  const isSearching = status === "connecting" && !canConnect;
+  const isConnected = status === "connected";
+  const hasFailed = status === "failed";
+
+  async function handleCopyCode() {
+    await navigator.clipboard?.writeText(pairingCode);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (canConnect) {
+      onConnect(friendCode);
+    }
+  }
+
+  return (
+    <div className="kuno-screen-enter flex h-full w-full min-w-0 max-w-full flex-col overflow-hidden bg-bg">
+      <header className="flex h-12 min-w-0 shrink-0 items-center border-b border-border px-3">
+        <button
+          type="button"
+          id="pairing-back-btn"
+          aria-label="戻る"
+          title="戻る"
+          onClick={onBack}
+          className="kuno-focus-ring grid h-8 w-8 place-items-center rounded-full text-muted transition-colors hover:bg-surface-hover hover:text-text"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <div className="flex min-w-0 flex-1 items-center gap-2 px-2">
+          <BrandMark className="h-5 w-5" />
+          <div className="truncate text-[13px] font-semibold text-text">Pair a device</div>
+        </div>
+        <PairingStatus status={status} />
+      </header>
+
+      <div className="kuno-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-6">
+        <div className="mx-auto w-full max-w-[300px]">
+          <div className="flex items-start gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-card bg-accent-soft text-accent">
+              <ShieldCheck className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-[17px] font-semibold text-text">{isConnected ? "接続済み" : hasFailed ? "接続できませんでした" : "2台のKunoChatを接続"}</h1>
+              <p className="mt-1 text-[12px] leading-5 text-muted">
+                {isConnected
+                  ? `${peerDisplayName || "相手"} と認証済みです。すぐに送信できます。`
+                  : hasFailed
+                    ? "相手PCが起動していることと、同じネットワークにいることを確認してください。"
+                    : "同じWi-Fiでは自動接続を試みます。必要なときだけコードを使います。"}
+              </p>
+            </div>
+          </div>
+
+          <section className="mt-7 border-y border-border py-4" aria-labelledby="your-code-label">
+            <div id="your-code-label" className="text-[11px] font-semibold uppercase tracking-[0.08em] text-faint">
+              Your code
+            </div>
+            <div className="mt-2 flex items-center gap-3">
+              <code className="min-w-0 flex-1 truncate font-mono text-[24px] font-semibold tracking-[0.16em] text-text">{pairingCode}</code>
+              <button
+                type="button"
+                id="copy-pairing-code-btn"
+                aria-label="ペアリングコードをコピー"
+                title="コードをコピー"
+                onClick={handleCopyCode}
+                className={clsx(
+                  "kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-full border transition-colors",
+                  copied ? "border-success/30 bg-success/10 text-success" : "border-border text-muted hover:bg-surface-hover hover:text-text"
+                )}
+              >
+                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              </button>
+            </div>
+            <p className="mt-2 text-[11px] text-muted">相手にこの6桁を伝えてください。</p>
+          </section>
+
+          <form className="mt-6" onSubmit={handleSubmit}>
+            <label className="block text-[12px] font-semibold text-text" htmlFor="friend-code">
+              相手のコード
+            </label>
+            <input
+              id="friend-code"
+              value={friendCode}
+              onChange={(event) => setFriendCode(formatPairingCode(event.target.value))}
+              placeholder="000-000"
+              autoComplete="off"
+              autoFocus
+              inputMode="numeric"
+              maxLength={7}
+              className="kuno-focus-ring mt-2 h-11 w-full rounded-input border border-border bg-surface px-3 font-mono text-[15px] tracking-[0.14em] text-text outline-none transition-colors placeholder:text-faint focus:border-accent focus:shadow-[0_0_0_3px_var(--accent-soft)]"
+            />
+            <button
+              type="submit"
+              id="pairing-connect-btn"
+              disabled={!canConnect}
+              className="kuno-focus-ring mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-input bg-accent px-4 text-[13px] font-semibold text-white transition-colors enabled:hover:bg-accent-hover enabled:active:scale-[0.99] disabled:bg-surface-active disabled:text-faint"
+            >
+              {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {isSearching ? "探索中" : "Connect"}
+            </button>
+          </form>
+
+          <p className="mt-4 text-[11px] leading-5 text-muted">{pairingHelpText(status, signalingConfigured, signalingUrl)}</p>
+          <p className="mt-2 text-[11px] leading-5 text-faint">このPCは接続後に相手デバイスを記憶し、別の鍵を持つ端末は遮断します。</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PairingStatus({ status }: { status: ConnectionStatus }) {
+  const connected = status === "connected";
+  const connecting = status === "connecting" || status === "reconnecting";
+  const failed = status === "failed";
+  return (
+    <span className={clsx("inline-flex items-center gap-1.5 text-[11px] font-medium", connected ? "text-success" : failed ? "text-danger" : "text-muted")}>
+      {connected ? <Wifi className="h-3.5 w-3.5" /> : connecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <WifiOff className="h-3.5 w-3.5" />}
+      {connected ? "Connected" : connecting ? "Connecting" : failed ? "Failed" : "Waiting"}
+    </span>
+  );
+}
+
+function formatPairingCode(value: string): string {
+  const digits = value.replace(/\D/g, "").slice(0, 6);
+  return digits.length > 3 ? `${digits.slice(0, 3)}-${digits.slice(3)}` : digits;
+}
+
+function pairingHelpText(status: ConnectionStatus, signalingConfigured: boolean, _signalingUrl: string): string {
+  if (!signalingConfigured) return "接続サービスを初期化できませんでした。アプリを再起動してください。";
+  if (status === "connected") return "接続の準備が完了しました。";
+  if (status === "failed") return "接続できませんでした。同じネットワークか、相手PCのKunoChatが開いているか確認してください。";
+  if (status === "connecting") return "相手PCの応答とデバイス認証を確認しています。";
+  return "相手のコードを入力すると、直接接続を開始します。";
+}

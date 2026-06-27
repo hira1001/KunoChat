@@ -92,14 +92,22 @@ Each entry should include:
 - Possible impact on other OS: macOS should install/test the `v0.3.2` release artifact after GitHub Actions publishes it. The fix affects shared WebRTC identity authentication on both Windows and macOS.
 - Follow-up: Push tag `v0.3.2`, wait for release workflow success, install new Windows/macOS artifacts, then retry cross-OS pairing and file transfer.
 
+### 2026-06-27 13:01 JST - Windows
+
+- Branch: `main`
+- Summary: Published GitHub Release `v0.3.2`.
+- Verified: Release workflow run `28277647183` completed successfully. Release is public and includes `KunoChat_0.3.2_universal.dmg`, `KunoChat_0.3.2_x64-setup.exe`, `KunoChat_0.3.2_x64_en-US.msi`, updater signatures, and `latest.json`.
+- Possible impact on other OS: Windows and macOS should both install the `v0.3.2` artifacts before retrying pairing, otherwise one side may still run the old unordered identity handshake.
+- Follow-up: Install `v0.3.2` on both machines and re-run cross-OS text/file transfer verification.
+
 ## Current Work
 
 ### Windows Codex
 
 - Branch: `codex/windows`
 - Current task: Windows installed-app verification.
-- Status: `v0.3.2` release candidate prepared with handshake fix. Awaiting GitHub release workflow and new installed artifact verification.
-- Blockers: Local Rust toolchain is unavailable on this Windows machine; hosted GitHub Actions must complete `cargo test` and bundle builds.
+- Status: `v0.3.2` published. Awaiting installation and real-device cross-OS verification.
+- Blockers: Installed Windows app is still the previous local `0.3.1` until the new `v0.3.2` installer is applied.
 
 ### macOS Codex
 

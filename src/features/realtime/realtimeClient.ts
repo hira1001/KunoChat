@@ -949,7 +949,7 @@ class KunoRealtimeClient {
     };
     channel.onmessage = (event) => {
       try {
-        this.handleControl(JSON.parse(String(event.data)) as RealtimeControlMessage);
+        this.handleControl(channel, JSON.parse(String(event.data)) as RealtimeControlMessage);
       } catch {
         this.callbacks?.onError("Invalid realtime control message received.");
       }
@@ -981,14 +981,18 @@ class KunoRealtimeClient {
     };
   }
 
-  private handleControl(message: RealtimeControlMessage) {
+  private handleControl(channel: RTCDataChannel, message: RealtimeControlMessage) {
+    if (this.control !== channel) {
+      return;
+    }
+
     if (message.type === "identity-hello") {
-      void this.handleIdentityHello(message);
+      void this.handleIdentityHello(channel, message);
       return;
     }
 
     if (message.type === "identity-proof") {
-      void this.handleIdentityProof(message);
+      void this.handleIdentityProof(channel, message);
       return;
     }
 
@@ -1131,10 +1135,14 @@ class KunoRealtimeClient {
 
   private async beginIdentityHandshake(channel: RTCDataChannel) {
     try {
+      const options = this.options;
+      if (!options) {
+        return;
+      }
       const identity = this.identity ?? { proofSent: false, verified: false };
       this.identity = identity;
       const local = await platformAdapter.getDeviceIdentity();
-      if (this.control !== channel || channel.readyState !== "open") {
+      if (!this.isCurrentIdentityContext(identity, channel, options)) {
         return;
       }
       if (!DEVICE_PUBLIC_KEY_PATTERN.test(local.publicKey)) {
@@ -1145,18 +1153,22 @@ class KunoRealtimeClient {
       this.sendControl({
         v: 1,
         type: "identity-hello",
-        senderId: this.options?.localPeerId ?? "",
+        senderId: options.localPeerId,
         publicKey: local.publicKey,
         nonce: identity.localNonce
       });
-      await this.sendIdentityProofIfReady(identity);
+      await this.sendIdentityProofIfReady(identity, channel, options);
     } catch (error) {
       this.rejectIdentity(error instanceof Error ? error.message : "Unable to load the local device identity.");
     }
   }
 
-  private async handleIdentityHello(message: Extract<RealtimeControlMessage, { type: "identity-hello" }>) {
-    if (!this.options || !isValidTransferId(message.senderId) || message.senderId === this.options.localPeerId) {
+  private async handleIdentityHello(channel: RTCDataChannel, message: Extract<RealtimeControlMessage, { type: "identity-hello" }>) {
+    const options = this.options;
+    if (!options || this.control !== channel) {
+      return;
+    }
+    if (!isValidTransferId(message.senderId) || message.senderId === options.localPeerId) {
       this.rejectIdentity("Received an invalid device identity hello.");
       return;
     }
@@ -1169,6 +1181,9 @@ class KunoRealtimeClient {
       const identity = this.identity ?? { proofSent: false, verified: false };
       this.identity = identity;
       const fingerprint = await fingerprintFromPublicKey(message.publicKey);
+      if (!this.isCurrentIdentityContext(identity, channel, options)) {
+        return;
+      }
       const nextRemote = {
         senderId: message.senderId,
         publicKey: message.publicKey.toLowerCase(),
@@ -1184,29 +1199,29 @@ class KunoRealtimeClient {
         return;
       }
       if (helloChange === "same") {
-        await this.sendIdentityProofIfReady(identity);
+        await this.sendIdentityProofIfReady(identity, channel, options);
         return;
       }
       identity.remote = {
         ...nextRemote,
         fingerprint
       };
-      await this.sendIdentityProofIfReady(identity);
+      await this.sendIdentityProofIfReady(identity, channel, options);
     } catch (error) {
       this.rejectIdentity(error instanceof Error ? error.message : "Failed to verify the remote device identity.");
     }
   }
 
-  private async sendIdentityProofIfReady(identity: IdentityHandshake) {
-    if (identity.proofSent || !identity.local || !identity.localNonce || !identity.remote || !this.options) {
+  private async sendIdentityProofIfReady(identity: IdentityHandshake, channel: RTCDataChannel, options: RealtimeConnectOptions) {
+    if (identity.proofSent || !identity.local || !identity.localNonce || !identity.remote || !this.isCurrentIdentityContext(identity, channel, options)) {
       return;
     }
 
     identity.proofSent = true;
     try {
       const challenge = buildIdentityChallenge({
-        roomId: this.options.roomId,
-        senderId: this.options.localPeerId,
+        roomId: options.roomId,
+        senderId: options.localPeerId,
         senderPublicKey: identity.local.publicKey,
         recipientId: identity.remote.senderId,
         recipientPublicKey: identity.remote.publicKey,
@@ -1214,13 +1229,16 @@ class KunoRealtimeClient {
         recipientNonce: identity.remote.nonce
       });
       const signature = await platformAdapter.signDeviceChallenge(challenge);
+      if (!this.isCurrentIdentityContext(identity, channel, options)) {
+        return;
+      }
       if (!DEVICE_SIGNATURE_PATTERN.test(signature)) {
         throw new Error("Native device identity returned an invalid signature.");
       }
       this.sendControl({
         v: 1,
         type: "identity-proof",
-        senderId: this.options.localPeerId,
+        senderId: options.localPeerId,
         publicKey: identity.local.publicKey,
         signature
       });
@@ -1230,10 +1248,14 @@ class KunoRealtimeClient {
     }
   }
 
-  private async handleIdentityProof(message: Extract<RealtimeControlMessage, { type: "identity-proof" }>) {
+  private async handleIdentityProof(channel: RTCDataChannel, message: Extract<RealtimeControlMessage, { type: "identity-proof" }>) {
     const identity = this.identity;
-    if (!identity?.local || !identity.localNonce || !identity.remote || !this.options) {
+    const options = this.options;
+    if (!identity?.local || !identity.localNonce || !identity.remote || !options) {
       this.rejectIdentity("Received an identity proof before the handshake was ready.");
+      return;
+    }
+    if (!this.isCurrentIdentityContext(identity, channel, options)) {
       return;
     }
     if (
@@ -1247,10 +1269,10 @@ class KunoRealtimeClient {
 
     try {
       const challenge = buildIdentityChallenge({
-        roomId: this.options.roomId,
+        roomId: options.roomId,
         senderId: identity.remote.senderId,
         senderPublicKey: identity.remote.publicKey,
-        recipientId: this.options.localPeerId,
+        recipientId: options.localPeerId,
         recipientPublicKey: identity.local.publicKey,
         senderNonce: identity.remote.nonce,
         recipientNonce: identity.localNonce
@@ -1260,12 +1282,15 @@ class KunoRealtimeClient {
         challenge,
         signature: message.signature
       });
+      if (!this.isCurrentIdentityContext(identity, channel, options)) {
+        return;
+      }
       if (!valid) {
         this.rejectIdentity("The remote device could not prove its identity.", identity.remote.fingerprint, identity.remote.publicKey);
         return;
       }
 
-      const trustedPeer = this.options.trustedPeer;
+      const trustedPeer = options.trustedPeer;
       if (
         trustedPeer &&
         (trustedPeer.publicKey.toLowerCase() !== identity.remote.publicKey || trustedPeer.fingerprint !== identity.remote.fingerprint)
@@ -1287,6 +1312,10 @@ class KunoRealtimeClient {
     } catch (error) {
       this.rejectIdentity(error instanceof Error ? error.message : "Failed to validate the remote device identity.", identity.remote.fingerprint, identity.remote.publicKey);
     }
+  }
+
+  private isCurrentIdentityContext(identity: IdentityHandshake, channel: RTCDataChannel, options: RealtimeConnectOptions) {
+    return this.identity === identity && this.control === channel && this.options === options && channel.readyState === "open";
   }
 
   private rejectIdentity(message: string, fingerprint?: string, publicKey?: string) {

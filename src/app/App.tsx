@@ -425,6 +425,13 @@ export function App() {
         if (autoConnectRef.current === key && state.connectionStatus === "connecting") {
           return;
         }
+        if (
+          autoConnectRef.current &&
+          autoConnectRef.current !== key &&
+          (state.connectionStatus === "connecting" || state.connectionStatus === "reconnecting")
+        ) {
+          return;
+        }
 
         autoConnectRef.current = key;
         setLastAutoConnect(event.payload);

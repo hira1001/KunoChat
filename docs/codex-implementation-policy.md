@@ -108,6 +108,14 @@ Each entry should include:
 - Possible impact on other OS: Windows should also install `KunoChat_0.3.3_x64-setup.exe` before cross-OS verification so both sides run the same shared realtime code.
 - Follow-up: Pair macOS `v0.3.3` with Windows `v0.3.3`, then verify text send, typing indicator, file transfer, reconnect, and peer-forget recovery.
 
+### 2026-06-27 17:54 JST - Windows
+
+- Branch: `main`
+- Summary: Investigated a `v0.3.3` installed-app failure where the UI briefly connected, then immediately changed to `接続できません / The remote device could not prove its identity.`
+- Verified: The installed Windows app was `0.3.3`; localStorage still had no saved `trustedPeer`, so the failure was not a trusted-peer mismatch. The remaining race was that identity messages and async signature verification from an old control data channel could still reject the current connection after LAN/Tailscale auto-connect or reconnect overlap.
+- Possible impact on other OS: This is shared realtime code. Both Windows and macOS should update to `v0.3.4` once published, because either side can emit stale identity messages during overlapping discovery/reconnect attempts.
+- Follow-up: Release `v0.3.4`, update the running Windows app via the in-app updater, and re-test cross-OS pairing.
+
 ## Current Work
 
 ### Windows Codex

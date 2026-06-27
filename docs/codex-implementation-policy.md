@@ -84,14 +84,22 @@ Each entry should include:
 - Possible impact on other OS: Confirms the installed Windows release has not received the handshake fix yet. macOS should not expect cross-OS transfer verification to pass against this Windows build.
 - Follow-up: Implement the handshake fix, rebuild/install the Windows app, then repeat the same installed-app check and cross-OS pairing test.
 
+### 2026-06-27 12:45 JST - Windows
+
+- Branch: `main`
+- Summary: Prepared `v0.3.2` release candidate with deterministic identity handshake handling.
+- Verified: `npm run typecheck`, `npm test` (167 passed), `npm run build`, and `node scripts/release-preflight.mjs --tag v0.3.2` passed locally. Local Rust `cargo test` could not be run because `cargo` is not installed on this Windows machine; the GitHub release workflow will run Rust tests on hosted runners before publishing.
+- Possible impact on other OS: macOS should install/test the `v0.3.2` release artifact after GitHub Actions publishes it. The fix affects shared WebRTC identity authentication on both Windows and macOS.
+- Follow-up: Push tag `v0.3.2`, wait for release workflow success, install new Windows/macOS artifacts, then retry cross-OS pairing and file transfer.
+
 ## Current Work
 
 ### Windows Codex
 
 - Branch: `codex/windows`
 - Current task: Windows installed-app verification.
-- Status: Re-verified installed Windows `0.3.1`; Retry still fails with remote identity proof error. Root cause remains identity nonce overwrite / unordered control-channel race, not stale trusted-peer storage.
-- Blockers: Needs handshake fix, rebuild, reinstall on both OSes, then cross-OS transfer verification.
+- Status: `v0.3.2` release candidate prepared with handshake fix. Awaiting GitHub release workflow and new installed artifact verification.
+- Blockers: Local Rust toolchain is unavailable on this Windows machine; hosted GitHub Actions must complete `cargo test` and bundle builds.
 
 ### macOS Codex
 

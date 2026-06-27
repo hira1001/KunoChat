@@ -57,6 +57,19 @@ function createIdentityNonce(): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+export function identityHelloChanged(
+  existing: { senderId: string; publicKey: string; nonce: string } | undefined,
+  next: { senderId: string; publicKey: string; nonce: string }
+): "new" | "same" | "identity" | "nonce" {
+  if (!existing) {
+    return "new";
+  }
+  if (existing.senderId !== next.senderId || existing.publicKey !== next.publicKey.toLowerCase()) {
+    return "identity";
+  }
+  return existing.nonce === next.nonce.toLowerCase() ? "same" : "nonce";
+}
+
 function hexToBytes(value: string): Uint8Array {
   const bytes = new Uint8Array(value.length / 2);
   for (let index = 0; index < bytes.length; index += 1) {
@@ -897,7 +910,7 @@ class KunoRealtimeClient {
 
     if (isInitiator) {
       console.log("[realtimeClient] initiator: creating control & binary data channels");
-      this.attachControlChannel(peer.createDataChannel("control", { ordered: false }));
+      this.attachControlChannel(peer.createDataChannel("control", { ordered: true }));
       this.attachBinaryChannel(peer.createDataChannel("binary", { ordered: true }));
     } else {
       console.log("[realtimeClient] receiver: binding ondatachannel callback");
@@ -1156,14 +1169,26 @@ class KunoRealtimeClient {
       const identity = this.identity ?? { proofSent: false, verified: false };
       this.identity = identity;
       const fingerprint = await fingerprintFromPublicKey(message.publicKey);
-      if (identity.remote && (identity.remote.publicKey !== message.publicKey.toLowerCase() || identity.remote.senderId !== message.senderId)) {
+      const nextRemote = {
+        senderId: message.senderId,
+        publicKey: message.publicKey.toLowerCase(),
+        nonce: message.nonce.toLowerCase()
+      };
+      const helloChange = identityHelloChanged(identity.remote, nextRemote);
+      if (helloChange === "identity") {
         this.rejectIdentity("The remote device identity changed during authentication.", fingerprint, message.publicKey);
         return;
       }
+      if (helloChange === "nonce") {
+        this.rejectIdentity("The remote device identity nonce changed during authentication.", fingerprint, message.publicKey);
+        return;
+      }
+      if (helloChange === "same") {
+        await this.sendIdentityProofIfReady(identity);
+        return;
+      }
       identity.remote = {
-        senderId: message.senderId,
-        publicKey: message.publicKey.toLowerCase(),
-        nonce: message.nonce.toLowerCase(),
+        ...nextRemote,
         fingerprint
       };
       await this.sendIdentityProofIfReady(identity);

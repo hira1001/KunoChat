@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildIdentityChallenge, decodeBinaryChunk, encodeBinaryChunk } from "./realtimeClient";
+import { buildIdentityChallenge, decodeBinaryChunk, encodeBinaryChunk, identityHelloChanged } from "./realtimeClient";
 
 function bytes(values: number[]) {
   return new Uint8Array(values).buffer;
@@ -85,5 +85,28 @@ describe("device identity challenges", () => {
       recipientNonce: "d".repeat(64)
     };
     expect(buildIdentityChallenge(base)).not.toBe(buildIdentityChallenge({ ...base, recipientId: "peer_other" }));
+  });
+
+  test("rejects nonce changes for the same remote identity during a handshake", () => {
+    const existing = {
+      senderId: "peer_sender",
+      publicKey: "a".repeat(64),
+      nonce: "b".repeat(64)
+    };
+
+    expect(identityHelloChanged(existing, existing)).toBe("same");
+    expect(identityHelloChanged(existing, { ...existing, nonce: "c".repeat(64) })).toBe("nonce");
+  });
+
+  test("distinguishes a changed remote identity from a replayed hello", () => {
+    const existing = {
+      senderId: "peer_sender",
+      publicKey: "a".repeat(64),
+      nonce: "b".repeat(64)
+    };
+
+    expect(identityHelloChanged(undefined, existing)).toBe("new");
+    expect(identityHelloChanged(existing, { ...existing, senderId: "peer_other" })).toBe("identity");
+    expect(identityHelloChanged(existing, { ...existing, publicKey: "c".repeat(64) })).toBe("identity");
   });
 });

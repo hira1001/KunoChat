@@ -68,14 +68,22 @@ Each entry should include:
 - Possible impact on other OS: Current Windows state shows `接続できません / The remote device could not prove its identity.`, so pairing trust may need to be reset on both Windows and macOS before cross-OS message/file transfer verification.
 - Follow-up: Use Settings -> Pairing -> Forget paired peer on both machines, then pair again and verify message/file transfer between Windows and macOS.
 
+### 2026-06-27 12:37 JST - Windows
+
+- Branch: `main`
+- Summary: Investigated the Windows identity failure. Windows localStorage has no `trustedPeer`, only `peerDisplayName`, so the failure is not a saved trusted-peer mismatch.
+- Verified: The error string is emitted only when `verifyDeviceSignature` returns false after receiving `identity-proof`. The current handshake code allows a second `identity-hello` from the same sender/public key to overwrite the stored remote nonce because it only rejects sender/public-key changes, and the control channel is created with `ordered: false`. If a proof generated for the previous nonce arrives after the nonce is overwritten, the verifier builds a different challenge and rejects it as `The remote device could not prove its identity.`
+- Possible impact on other OS: Both Windows and macOS can hit this during LAN auto-connect/reconnect races, especially when discovery emits a new connection attempt while authentication messages are still in flight.
+- Follow-up: Make the identity handshake deterministic by using an ordered control channel and by treating a changed nonce during the same authentication attempt as stale/invalid instead of overwriting it. Then rebuild/install both OS releases and retry pairing.
+
 ## Current Work
 
 ### Windows Codex
 
 - Branch: `codex/windows`
 - Current task: Windows installed-app verification.
-- Status: App launch and Settings screen verified. Pairing/message transfer not yet verified due to remote identity trust error.
-- Blockers: Needs paired macOS device reset/re-pairing to continue cross-OS transfer verification.
+- Status: App launch and Settings screen verified. Root cause investigation points to identity nonce overwrite / unordered control-channel race, not stale trusted-peer storage.
+- Blockers: Needs handshake fix, rebuild, reinstall on both OSes, then cross-OS transfer verification.
 
 ### macOS Codex
 

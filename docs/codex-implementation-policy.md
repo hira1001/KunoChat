@@ -116,6 +116,14 @@ Each entry should include:
 - Possible impact on other OS: This is shared realtime code. Both Windows and macOS should update to `v0.3.4` once published, because either side can emit stale identity messages during overlapping discovery/reconnect attempts.
 - Follow-up: Release `v0.3.4`, update the running Windows app via the in-app updater, and re-test cross-OS pairing.
 
+### 2026-06-27 18:16 JST - Windows
+
+- Branch: `main`
+- Summary: Verified the running Windows `v0.3.3` app can update itself to `v0.3.4` through Settings -> App update.
+- Verified: The app detected `v0.3.4`, downloaded the update, closed the old window, restarted KunoChat, and then showed `現在のバージョン: v0.3.4` in Settings. `C:\Users\ymy26\AppData\Local\KunoChat\kunochat.exe` also reports `ProductVersion` and `FileVersion` `0.3.4`.
+- Possible impact on other OS: Windows is now on `v0.3.4`; macOS should also update to `v0.3.4` before cross-OS pairing is judged again.
+- Follow-up: Re-test Windows/macOS pairing and confirm the stale identity proof failure no longer appears after both sides are on `v0.3.4`.
+
 ## Current Work
 
 ### Windows Codex

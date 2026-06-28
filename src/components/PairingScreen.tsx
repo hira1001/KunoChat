@@ -24,6 +24,7 @@ type PairingScreenProps = {
   displayName: string;
   peerDisplayName?: string;
   detectedPeers: DetectedPeerOption[];
+  selectedPeerId?: string;
   onBack: () => void;
   onConnect: (friendCode: string) => void;
   onConnectDetectedPeer: (peer: DetectedPeerOption) => void;
@@ -37,6 +38,7 @@ export function PairingScreen({
   displayName,
   peerDisplayName,
   detectedPeers,
+  selectedPeerId,
   onBack,
   onConnect,
   onConnectDetectedPeer
@@ -128,25 +130,33 @@ export function PairingScreen({
             </div>
             <div className="mt-2 space-y-2">
               {detectedPeers.length > 0 ? (
-                detectedPeers.map((peer) => (
-                  <button
-                    key={peer.id}
-                    type="button"
-                    onClick={() => onConnectDetectedPeer(peer)}
-                    className="kuno-focus-ring flex min-h-14 w-full min-w-0 items-center gap-3 rounded-input border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-accent hover:bg-surface-hover"
-                  >
-                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent-soft text-accent">
-                      <Laptop className="h-4 w-4" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13px] font-semibold text-text">{peer.deviceName || peer.peerHint}</span>
-                      <span className="mt-0.5 block truncate text-[11px] text-muted">
-                        {peerPlatformLabel(peer.platform)} / {peer.source === "tailscale" ? "Tailscale" : "LAN"} / {peer.peerHint}
+                detectedPeers.map((peer) => {
+                  const selected = peer.id === selectedPeerId;
+                  return (
+                    <button
+                      key={peer.id}
+                      type="button"
+                      onClick={() => onConnectDetectedPeer(peer)}
+                      className={clsx(
+                        "kuno-focus-ring flex min-h-14 w-full min-w-0 items-center gap-3 rounded-input border px-3 py-2 text-left transition-colors",
+                        selected
+                          ? "border-accent bg-accent-soft"
+                          : "border-border bg-surface hover:border-accent hover:bg-surface-hover"
+                      )}
+                    >
+                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent-soft text-accent">
+                        <Laptop className="h-4 w-4" />
                       </span>
-                    </span>
-                    <span className="shrink-0 text-[12px] font-semibold text-accent">Connect</span>
-                  </button>
-                ))
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] font-semibold text-text">{peer.deviceName || peer.peerHint}</span>
+                        <span className="mt-0.5 block truncate text-[11px] text-muted">
+                          {peerPlatformLabel(peer.platform)} / {peer.source === "tailscale" ? "Tailscale" : "LAN"} / {peer.peerHint}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-[12px] font-semibold text-accent">{selected ? "Waiting" : "Request"}</span>
+                    </button>
+                  );
+                })
               ) : (
                 <div className="rounded-input border border-dashed border-border px-3 py-3 text-[11px] leading-5 text-muted">
                   No nearby devices yet.

@@ -8,7 +8,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tauri::async_runtime;
+use tauri::{async_runtime, AppHandle, Emitter, Manager};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{
@@ -39,15 +39,15 @@ struct Peer {
     tx: Sender<Message>,
 }
 
-pub fn start(port: u16) {
+pub fn start(app: AppHandle, port: u16) {
     async_runtime::spawn(async move {
-        if let Err(error) = run_server(port).await {
+        if let Err(error) = run_server(app, port).await {
             eprintln!("KunoChat embedded signaling server stopped: {error}");
         }
     });
 }
 
-async fn run_server(port: u16) -> Result<(), String> {
+async fn run_server(app: AppHandle, port: u16) -> Result<(), String> {
     let listener = TcpListener::bind(("0.0.0.0", port))
         .await
         .map_err(|error| format!("cannot bind signaling server on port {port}: {error}"))?;
@@ -61,16 +61,22 @@ async fn run_server(port: u16) -> Result<(), String> {
             continue;
         };
         let rooms = rooms.clone();
+        let app = app.clone();
         async_runtime::spawn(async move {
             let _permit = permit;
-            if let Err(error) = handle_connection(stream, rooms).await {
+            if let Err(error) = handle_connection(app, stream, rooms).await {
                 eprintln!("KunoChat signaling connection ended: {error}");
             }
         });
     }
 }
 
-async fn handle_connection(stream: TcpStream, rooms: Rooms) -> Result<(), String> {
+async fn handle_connection(app: AppHandle, stream: TcpStream, rooms: Rooms) -> Result<(), String> {
+    let remote_ip = stream
+        .peer_addr()
+        .ok()
+        .map(|addr| addr.ip().to_string())
+        .unwrap_or_default();
     let websocket_config = WebSocketConfig::default()
         .max_message_size(Some(MAX_SIGNAL_MESSAGE_BYTES))
         .max_frame_size(Some(MAX_SIGNAL_MESSAGE_BYTES));
@@ -128,6 +134,57 @@ async fn handle_connection(stream: TcpStream, rooms: Rooms) -> Result<(), String
         let message: Value =
             serde_json::from_str(raw_text).map_err(|_| "invalid JSON".to_string())?;
         let message_type = message.get("type").and_then(Value::as_str).unwrap_or("");
+
+        if message_type == "connection-request" {
+            let request_id = message
+                .get("requestId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .chars()
+                .take(128)
+                .collect::<String>();
+            let room_id =
+                normalize_room_id(message.get("roomId").and_then(Value::as_str).unwrap_or(""));
+            let requester_name = message
+                .get("requesterName")
+                .and_then(Value::as_str)
+                .unwrap_or("Peer")
+                .chars()
+                .take(80)
+                .collect::<String>();
+            let requester_peer_id = message
+                .get("requesterPeerId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .chars()
+                .take(128)
+                .collect::<String>();
+
+            if request_id.is_empty() || room_id.is_empty() || !is_valid_peer_id(&requester_peer_id)
+            {
+                send_json(
+                    &tx,
+                    json!({ "type": "error", "message": "invalid connection request." }),
+                );
+                continue;
+            }
+
+            let payload = json!({
+                "requestId": request_id,
+                "roomId": room_id,
+                "requesterName": requester_name,
+                "requesterPeerId": requester_peer_id,
+                "peerHint": remote_ip
+            });
+            let _ = app.emit("kuno:connection-request", payload);
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+                let _ = app.emit("kuno:navigate", "main");
+            }
+            send_json(&tx, json!({ "type": "connection-request-ack", "requestId": request_id }));
+            continue;
+        }
 
         if message_type == "join" {
             let next_room =

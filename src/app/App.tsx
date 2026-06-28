@@ -77,6 +77,14 @@ type NativeTransferEvent = {
   message?: string;
 };
 
+type ConnectionRequestPayload = {
+  requestId: string;
+  roomId: string;
+  requesterName: string;
+  requesterPeerId: string;
+  peerHint: string;
+};
+
 type ConnectionDiagnostic = {
   tone: "info" | "warning" | "danger";
   title: string;
@@ -132,6 +140,7 @@ export function App() {
   const [diagnostic, setDiagnostic] = useState<ConnectionDiagnostic>();
   const [lastAutoConnect, setLastAutoConnect] = useState<AutoConnectPayload>();
   const [detectedPeers, setDetectedPeers] = useState<DetectedPeer[]>([]);
+  const [connectionRequest, setConnectionRequest] = useState<ConnectionRequestPayload>();
   if (!sessionPeerIdRef.current) {
     sessionPeerIdRef.current = `${settings.localPeerId}_${crypto.randomUUID()}`;
   }
@@ -435,6 +444,18 @@ export function App() {
         }
         setDetectedPeers((peers) => upsertDetectedPeer(peers, event.payload));
       }),
+      listen<ConnectionRequestPayload>("kuno:connection-request", (event) => {
+        if (useChatStore.getState().connectionStatus === "connected") {
+          return;
+        }
+        setConnectionRequest(event.payload);
+        setDiagnostic({
+          tone: "info",
+          title: "接続依頼が届きました",
+          detail: `${event.payload.requesterName || "相手"} が接続を求めています。`
+        });
+        setView("main");
+      }),
       listen<NativeTransferEvent>("kuno:native-transfer", (event) => {
         const transfer = event.payload;
         if (!Number.isSafeInteger(transfer.transferredBytes) || !Number.isSafeInteger(transfer.totalBytes)) {
@@ -714,7 +735,16 @@ export function App() {
     if (!sessionPeerId) {
       return;
     }
-    const detectedPeerUrl = lastAutoConnect?.peerHint ? signalingUrlForPeer(lastAutoConnect.peerHint) : undefined;
+    const selectedPeer = lastAutoConnect;
+    const detectedPeerUrl = selectedPeer?.peerHint ? signalingUrlForPeer(selectedPeer.peerHint) : undefined;
+    if (selectedPeer) {
+      setLastAutoConnect({
+        ...selectedPeer,
+        roomId: normalizedCode,
+        mode: "join",
+        signalingUrl: detectedPeerUrl ?? selectedPeer.signalingUrl
+      });
+    }
 
     void realtimeClient.connect({
       roomId: normalizedCode,
@@ -722,33 +752,64 @@ export function App() {
       displayName: settings.displayName || "You",
       mode: "join",
       signalingUrl: detectedPeerUrl,
-      nativeEndpoint: lastAutoConnect?.peerHint ? nativeEndpointForPeer(lastAutoConnect.peerHint) : undefined,
+      nativeEndpoint: selectedPeer?.peerHint ? nativeEndpointForPeer(selectedPeer.peerHint) : undefined,
       trustedPeer: settings.trustedPeer
     }).catch(() => undefined);
   }
 
-  function handleConnectDetectedPeer(peer: DetectedPeer) {
+  async function handleConnectDetectedPeer(peer: DetectedPeer) {
     const sessionPeerId = sessionPeerIdRef.current;
     if (!sessionPeerId) {
       return;
     }
+    const roomId = createPairingCode();
+    const signalingUrl = signalingUrlForPeer(peer.peerHint) ?? peer.signalingUrl;
+    const requestId = crypto.randomUUID();
+    const requestPeer = {
+      ...peer,
+      roomId,
+      mode: "join" as const,
+      signalingUrl
+    };
 
     setLastAutoConnect(peer);
     setDiagnostic({
       tone: "info",
-      title: "Connecting to selected device",
-      detail: `${peer.deviceName || peer.peerHint} (${peer.peerHint})`
+      title: "接続依頼を送信中",
+      detail: `${peer.deviceName || peer.peerHint} に接続依頼を送っています。`
     });
     setView("main");
-    void realtimeClient.connect({
-      roomId: peer.roomId,
-      localPeerId: sessionPeerId,
-      displayName: settings.displayName || "You",
-      mode: peer.mode,
-      signalingUrl: peer.signalingUrl,
-      nativeEndpoint: nativeEndpointForPeer(peer.peerHint),
-      trustedPeer: settings.trustedPeer
-    }).catch(() => undefined);
+
+    try {
+      await sendConnectionRequest(signalingUrl, {
+        requestId,
+        roomId,
+        requesterName: settings.displayName || "You",
+        requesterPeerId: sessionPeerId
+      });
+      setLastAutoConnect(requestPeer);
+      setDiagnostic({
+        tone: "info",
+        title: "承認待ち",
+        detail: `${peer.deviceName || peer.peerHint} 側で接続を承認してください。`
+      });
+      void realtimeClient.connect({
+        roomId,
+        localPeerId: sessionPeerId,
+        displayName: settings.displayName || "You",
+        mode: "join",
+        signalingUrl,
+        nativeEndpoint: nativeEndpointForPeer(peer.peerHint),
+        trustedPeer: settings.trustedPeer
+      }).catch(() => undefined);
+    } catch (error) {
+      setConnectionStatus("failed");
+      setDiagnostic({
+        tone: "danger",
+        title: "接続依頼を送れません",
+        detail: error instanceof Error ? error.message : "相手のKunoChatに接続依頼を送れませんでした。"
+      });
+    }
   }
 
   function handleRetryAutoConnect() {
@@ -768,6 +829,42 @@ export function App() {
       nativeEndpoint: nativeEndpointForPeer(payload.peerHint),
       trustedPeer: settings.trustedPeer
     }).catch(() => undefined);
+  }
+
+  function handleAcceptConnectionRequest() {
+    const request = connectionRequest;
+    const sessionPeerId = sessionPeerIdRef.current;
+    if (!request || !sessionPeerId) {
+      return;
+    }
+
+    setConnectionRequest(undefined);
+    setLastAutoConnect({
+      signalingUrl: runtimeConfig.signalingUrl,
+      roomId: request.roomId,
+      mode: "host",
+      peerHint: request.peerHint,
+      source: "lan",
+      deviceName: request.requesterName
+    });
+    setDiagnostic({
+      tone: "info",
+      title: "接続を承認しました",
+      detail: `${request.requesterName || "相手"} と接続しています。`
+    });
+    void realtimeClient.connect({
+      roomId: request.roomId,
+      localPeerId: sessionPeerId,
+      displayName: settings.displayName || "You",
+      mode: "host",
+      nativeEndpoint: nativeEndpointForPeer(request.peerHint),
+      trustedPeer: settings.trustedPeer
+    }).catch(() => undefined);
+  }
+
+  function handleDeclineConnectionRequest() {
+    setConnectionRequest(undefined);
+    setDiagnostic(undefined);
   }
 
   const peerName = settings.peerDisplayName ?? (connectionStatus === "connected" ? "Peer" : "未接続");
@@ -859,6 +956,7 @@ export function App() {
           displayName={settings.displayName || "You"}
           peerDisplayName={peerName}
           detectedPeers={detectedPeers}
+          selectedPeerId={lastAutoConnect ? detectedPeerId(lastAutoConnect) : undefined}
           onBack={() => setView("main")}
           onConnect={handleConnect}
           onConnectDetectedPeer={handleConnectDetectedPeer}
@@ -895,6 +993,11 @@ export function App() {
             onHistory={() => setView("history")}
             onMini={() => setView("mini")}
             onPair={() => setView("pairing")}
+          />
+          <ConnectionRequestBanner
+            request={connectionRequest}
+            onAccept={handleAcceptConnectionRequest}
+            onDecline={handleDeclineConnectionRequest}
           />
           <ConnectionBanner
             diagnostic={diagnostic}
@@ -1147,6 +1250,74 @@ function connectionHelpText(message: string): string {
     return "この接続ルームはすでに使用中です。相手PCだけが開いている状態で再試行してください。";
   }
   return message || "相手PC、ネットワーク、ファイアウォール設定を確認してください。";
+}
+
+async function sendConnectionRequest(
+  signalingUrl: string,
+  payload: { requestId: string; roomId: string; requesterName: string; requesterPeerId: string }
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const socket = new WebSocket(signalingUrl);
+    const timer = window.setTimeout(() => {
+      socket.close();
+      reject(new Error(`Cannot reach KunoChat at ${signalingUrl}.`));
+    }, 5000);
+
+    socket.onopen = () => {
+      socket.send(JSON.stringify({ type: "connection-request", ...payload }));
+    };
+    socket.onmessage = (event) => {
+      const message = JSON.parse(String(event.data)) as { type?: string; message?: string };
+      if (message.type === "connection-request-ack") {
+        window.clearTimeout(timer);
+        socket.close();
+        resolve();
+      } else if (message.type === "error") {
+        window.clearTimeout(timer);
+        socket.close();
+        reject(new Error(message.message || "Connection request was rejected by the peer."));
+      }
+    };
+    socket.onerror = () => {
+      window.clearTimeout(timer);
+      reject(new Error(`Cannot reach KunoChat at ${signalingUrl}.`));
+    };
+  });
+}
+
+function ConnectionRequestBanner({
+  request,
+  onAccept,
+  onDecline
+}: {
+  request?: ConnectionRequestPayload;
+  onAccept: () => void;
+  onDecline: () => void;
+}) {
+  if (!request) {
+    return null;
+  }
+
+  return (
+    <div className="mx-3 mt-3 max-w-[calc(100%-1.5rem)] overflow-hidden rounded-card border border-accent/30 bg-accent-soft px-3 py-2.5 text-text" role="status">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-[12px] font-semibold">接続依頼</div>
+          <div className="mt-0.5 break-words text-[11px] leading-4 text-muted">
+            {request.requesterName || "相手"} が接続を求めています。
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button type="button" onClick={onDecline} className="kuno-focus-ring rounded-input bg-white/80 px-2.5 py-1 text-[11px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
+            Decline
+          </button>
+          <button type="button" onClick={onAccept} className="kuno-focus-ring rounded-input bg-accent px-2.5 py-1 text-[11px] font-semibold text-white shadow-sm transition-colors hover:bg-accent-hover">
+            Connect
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function ConnectionBanner({

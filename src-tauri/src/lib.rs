@@ -32,7 +32,7 @@ pub fn run() {
             window::start(app);
             transfer_session::start(app)
                 .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;
-            native::signal_server::start(8787);
+            native::signal_server::start(app.handle().clone(), 8787);
             native::transfer::start(app);
             native::peer_discovery::start(app.handle().clone());
             native::tailscale_discovery::start(app.handle().clone());

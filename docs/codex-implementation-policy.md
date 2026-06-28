@@ -179,6 +179,14 @@ Each entry should include:
 - Possible impact on other OS: macOS should update to `v0.3.7` before testing manual peer selection against Windows.
 - Follow-up: Open Pair, select the intended Windows/Mac peer from Detected devices, then retry text and file transfer.
 
+### 2026-06-28 20:30 JST - Windows
+
+- Branch: `main`
+- Summary: Reworked manual peer selection into an explicit connection-request flow. Selecting a detected device now sends a `connection-request` to the peer's embedded signaling server, the peer shows a Connect/Decline banner, and accepting joins both sides into the same room.
+- Verified: `npm run typecheck`, `npm test` (166 passed), and `npm run build` passed locally. Local Rust `cargo test` could not be run because `cargo` is not installed on this Windows machine.
+- Possible impact on other OS: Shared pairing behavior and native signaling server behavior. Both Windows and macOS must update to `v0.3.8` to use request/accept pairing.
+- Follow-up: Publish `v0.3.8`, update installed apps, then test selecting a peer and accepting the request from the other side before retrying file transfer.
+
 ## Current Work
 
 ### Windows Codex

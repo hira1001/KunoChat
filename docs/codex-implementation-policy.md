@@ -171,6 +171,14 @@ Each entry should include:
 - Verified: Covered by the same local frontend checks above. The Rust close-event change will be compiled and tested by the release workflow.
 - Possible impact on other OS: Closing the main window now terminates the app on all desktop targets instead of leaving background discovery and servers running.
 
+### 2026-06-28 13:10 JST - Windows
+
+- Branch: `main`
+- Summary: Published `v0.3.7` and updated the Windows installed app.
+- Verified: Release workflow `28310538899` completed successfully with Windows and macOS assets plus `latest.json`. Windows was updated with `KunoChat_0.3.7_x64-setup.exe`; `C:\Users\ymy26\AppData\Local\KunoChat\kunochat.exe` reports `ProductVersion` and `FileVersion` `0.3.7`. Sending a main-window close signal exits the process instead of hiding it. The app was relaunched and is listening on TCP `8787`/`8790`.
+- Possible impact on other OS: macOS should update to `v0.3.7` before testing manual peer selection against Windows.
+- Follow-up: Open Pair, select the intended Windows/Mac peer from Detected devices, then retry text and file transfer.
+
 ## Current Work
 
 ### Windows Codex

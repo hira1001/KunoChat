@@ -1,8 +1,20 @@
-import { Check, ChevronLeft, Copy, Loader2, ShieldCheck, Wifi, WifiOff } from "lucide-react";
+import { Check, ChevronLeft, Copy, Laptop, Loader2, ShieldCheck, Wifi, WifiOff } from "lucide-react";
 import clsx from "clsx";
 import { useState, type FormEvent } from "react";
 import type { ConnectionStatus } from "../features/chat/messageTypes";
 import { BrandMark } from "./BrandMark";
+
+type DetectedPeerOption = {
+  id: string;
+  signalingUrl: string;
+  roomId: string;
+  mode: "host" | "join";
+  peerHint: string;
+  source?: "lan" | "tailscale";
+  deviceName?: string;
+  platform?: string;
+  lastSeen: number;
+};
 
 type PairingScreenProps = {
   status: ConnectionStatus;
@@ -11,8 +23,10 @@ type PairingScreenProps = {
   signalingUrl: string;
   displayName: string;
   peerDisplayName?: string;
+  detectedPeers: DetectedPeerOption[];
   onBack: () => void;
   onConnect: (friendCode: string) => void;
+  onConnectDetectedPeer: (peer: DetectedPeerOption) => void;
 };
 
 export function PairingScreen({
@@ -22,8 +36,10 @@ export function PairingScreen({
   signalingUrl,
   displayName,
   peerDisplayName,
+  detectedPeers,
   onBack,
-  onConnect
+  onConnect,
+  onConnectDetectedPeer
 }: PairingScreenProps) {
   const [friendCode, setFriendCode] = useState("");
   const [copied, setCopied] = useState(false);
@@ -106,6 +122,39 @@ export function PairingScreen({
             <p className="mt-2 text-[11px] text-muted">相手にこの6桁を伝えてください。</p>
           </section>
 
+          <section className="mt-6" aria-labelledby="detected-devices-label">
+            <div id="detected-devices-label" className="text-[11px] font-semibold uppercase tracking-[0.08em] text-faint">
+              Detected devices
+            </div>
+            <div className="mt-2 space-y-2">
+              {detectedPeers.length > 0 ? (
+                detectedPeers.map((peer) => (
+                  <button
+                    key={peer.id}
+                    type="button"
+                    onClick={() => onConnectDetectedPeer(peer)}
+                    className="kuno-focus-ring flex min-h-14 w-full min-w-0 items-center gap-3 rounded-input border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-accent hover:bg-surface-hover"
+                  >
+                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent-soft text-accent">
+                      <Laptop className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[13px] font-semibold text-text">{peer.deviceName || peer.peerHint}</span>
+                      <span className="mt-0.5 block truncate text-[11px] text-muted">
+                        {peerPlatformLabel(peer.platform)} / {peer.source === "tailscale" ? "Tailscale" : "LAN"} / {peer.peerHint}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-[12px] font-semibold text-accent">Connect</span>
+                  </button>
+                ))
+              ) : (
+                <div className="rounded-input border border-dashed border-border px-3 py-3 text-[11px] leading-5 text-muted">
+                  No nearby devices yet.
+                </div>
+              )}
+            </div>
+          </section>
+
           <form className="mt-6" onSubmit={handleSubmit}>
             <label className="block text-[12px] font-semibold text-text" htmlFor="friend-code">
               相手のコード
@@ -155,6 +204,13 @@ function PairingStatus({ status }: { status: ConnectionStatus }) {
 function formatPairingCode(value: string): string {
   const digits = value.replace(/\D/g, "").slice(0, 6);
   return digits.length > 3 ? `${digits.slice(0, 3)}-${digits.slice(3)}` : digits;
+}
+
+function peerPlatformLabel(platform: string | undefined): string {
+  if (platform === "windows") return "Windows";
+  if (platform === "macos") return "Mac";
+  if (platform === "linux") return "Linux";
+  return "Unknown OS";
 }
 
 function pairingHelpText(status: ConnectionStatus, signalingConfigured: boolean, _signalingUrl: string): string {

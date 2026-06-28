@@ -33,6 +33,9 @@ struct TailscaleNode {
     #[serde(rename = "TailscaleIPs")]
     #[serde(default)]
     tailscale_ips: Vec<String>,
+    #[serde(rename = "OS")]
+    #[serde(default)]
+    os: String,
     #[serde(default)]
     online: bool,
 }
@@ -45,6 +48,8 @@ struct AutoConnectPayload {
     mode: String,
     peer_hint: String,
     source: String,
+    device_name: Option<String>,
+    platform: Option<String>,
 }
 
 struct TailscaleCandidate {
@@ -53,6 +58,8 @@ struct TailscaleCandidate {
     mode: String,
     peer_hint: String,
     probe_host: String,
+    device_name: Option<String>,
+    platform: Option<String>,
 }
 
 pub fn start(app: AppHandle) {
@@ -96,6 +103,8 @@ async fn run_discovery(app: AppHandle) {
                 mode: candidate.mode,
                 peer_hint: candidate.peer_hint,
                 source: "tailscale".to_string(),
+                device_name: candidate.device_name,
+                platform: candidate.platform,
             },
         );
     }
@@ -179,7 +188,7 @@ fn select_candidate(status: &TailscaleStatus) -> Option<TailscaleCandidate> {
         return None;
     }
 
-    let mut peers = status
+    let peer = status
         .peer
         .values()
         .filter(|peer| peer.online)
@@ -189,12 +198,16 @@ fn select_candidate(status: &TailscaleStatus) -> Option<TailscaleCandidate> {
             if peer_id.is_empty() {
                 return None;
             }
-            Some((peer_id.to_string(), peer_ip.to_string(), peer_hint(peer)))
+            Some((
+                peer_id.to_string(),
+                peer_ip.to_string(),
+                peer_hint(peer),
+                device_name_from_dns(peer),
+                platform_from_tailscale_os(peer),
+            ))
         })
-        .collect::<Vec<_>>();
-
-    peers.sort_by(|left, right| left.0.cmp(&right.0));
-    let (peer_id, peer_ip, peer_hint) = peers.into_iter().next()?;
+        .min_by(|left, right| left.0.cmp(&right.0))?;
+    let (peer_id, peer_ip, peer_hint, device_name, platform) = peer;
     let server_ip = if self_id <= peer_id.as_str() {
         self_ip
     } else {
@@ -208,6 +221,8 @@ fn select_candidate(status: &TailscaleStatus) -> Option<TailscaleCandidate> {
         mode: mode.to_string(),
         peer_hint,
         probe_host: peer_ip,
+        device_name,
+        platform,
     })
 }
 
@@ -226,6 +241,26 @@ fn peer_hint(node: &TailscaleNode) -> String {
     first_tailscale_ip(node)
         .unwrap_or("Tailscale peer")
         .to_string()
+}
+
+fn device_name_from_dns(node: &TailscaleNode) -> Option<String> {
+    node.dns_name
+        .split('.')
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn platform_from_tailscale_os(node: &TailscaleNode) -> Option<String> {
+    let os = node.os.trim();
+    if os.is_empty() {
+        None
+    } else if os.eq_ignore_ascii_case("macOS") {
+        Some("macos".to_string())
+    } else {
+        Some(os.to_ascii_lowercase())
+    }
 }
 
 fn is_kunochat_reachable(peer_hint: &str) -> bool {
@@ -260,6 +295,7 @@ mod tests {
             id: id.to_string(),
             dns_name: dns_name.to_string(),
             tailscale_ips: vec![ip.to_string()],
+            os: String::new(),
             online,
         }
     }

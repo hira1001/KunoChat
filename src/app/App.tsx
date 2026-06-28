@@ -26,7 +26,30 @@ type AutoConnectPayload = {
   mode: "host" | "join";
   peerHint: string;
   source?: "lan" | "tailscale";
+  deviceName?: string;
+  platform?: string;
 };
+
+export type DetectedPeer = AutoConnectPayload & {
+  id: string;
+  lastSeen: number;
+};
+
+function detectedPeerId(peer: AutoConnectPayload): string {
+  return `${peer.source ?? "lan"}:${peer.peerHint}`;
+}
+
+function upsertDetectedPeer(peers: DetectedPeer[], payload: AutoConnectPayload): DetectedPeer[] {
+  const nextPeer: DetectedPeer = {
+    ...payload,
+    id: detectedPeerId(payload),
+    lastSeen: Date.now()
+  };
+  const nextPeers = peers.filter((peer) => peer.id !== nextPeer.id);
+  return [nextPeer, ...nextPeers]
+    .sort((left, right) => right.lastSeen - left.lastSeen)
+    .slice(0, 8);
+}
 
 function nativeEndpointForPeer(peerHint: string): string | undefined {
   const host = peerHint.trim();
@@ -98,7 +121,6 @@ export function App() {
   const pairingCode = useMemo(createPairingCode, []);
   const sessionPeerIdRef = useRef<string>();
   const hostedRoomRef = useRef<string>();
-  const autoConnectRef = useRef<string>();
   const recoveredTransfersRef = useRef(false);
   const recoveryLoadedRef = useRef(false);
   const recoverySessionsRef = useRef<DurableTransferSession[]>([]);
@@ -109,6 +131,7 @@ export function App() {
   const unreadEpochRef = useRef(0);
   const [diagnostic, setDiagnostic] = useState<ConnectionDiagnostic>();
   const [lastAutoConnect, setLastAutoConnect] = useState<AutoConnectPayload>();
+  const [detectedPeers, setDetectedPeers] = useState<DetectedPeer[]>([]);
   if (!sessionPeerIdRef.current) {
     sessionPeerIdRef.current = `${settings.localPeerId}_${crypto.randomUUID()}`;
   }
@@ -407,48 +430,10 @@ export function App() {
         setView("main");
       }),
       listen<AutoConnectPayload>("kuno:auto-connect", (event) => {
-        const sessionPeerId = sessionPeerIdRef.current;
-        if (!sessionPeerId) {
+        if (useChatStore.getState().connectionStatus === "connected") {
           return;
         }
-
-        const state = useChatStore.getState();
-        if (state.connectionStatus === "connected") {
-          return;
-        }
-
-        const key = `${event.payload.signalingUrl}:${event.payload.roomId}:${event.payload.mode}`;
-        if (autoConnectRef.current === key && state.connectionStatus === "connecting") {
-          return;
-        }
-        if (
-          autoConnectRef.current &&
-          autoConnectRef.current !== key &&
-          (state.connectionStatus === "connecting" || state.connectionStatus === "reconnecting")
-        ) {
-          return;
-        }
-
-        autoConnectRef.current = key;
-        setLastAutoConnect(event.payload);
-        const sourceLabel = event.payload.source === "tailscale" ? "Tailscale" : "LAN";
-        setDiagnostic({
-          tone: "info",
-          title: `${sourceLabel}でKunoChatを検出`,
-          detail: `${event.payload.peerHint} と接続を準備しています。`
-        });
-        if (state.currentView === "pairing") {
-          setView("main");
-        }
-        void realtimeClient.connect({
-          roomId: event.payload.roomId,
-          localPeerId: sessionPeerId,
-          displayName: state.settings.displayName || "You",
-          mode: event.payload.mode,
-          signalingUrl: event.payload.signalingUrl,
-          nativeEndpoint: nativeEndpointForPeer(event.payload.peerHint),
-          trustedPeer: state.settings.trustedPeer
-        }).catch(() => undefined);
+        setDetectedPeers((peers) => upsertDetectedPeer(peers, event.payload));
       }),
       listen<NativeTransferEvent>("kuno:native-transfer", (event) => {
         const transfer = event.payload;
@@ -742,6 +727,30 @@ export function App() {
     }).catch(() => undefined);
   }
 
+  function handleConnectDetectedPeer(peer: DetectedPeer) {
+    const sessionPeerId = sessionPeerIdRef.current;
+    if (!sessionPeerId) {
+      return;
+    }
+
+    setLastAutoConnect(peer);
+    setDiagnostic({
+      tone: "info",
+      title: "Connecting to selected device",
+      detail: `${peer.deviceName || peer.peerHint} (${peer.peerHint})`
+    });
+    setView("main");
+    void realtimeClient.connect({
+      roomId: peer.roomId,
+      localPeerId: sessionPeerId,
+      displayName: settings.displayName || "You",
+      mode: peer.mode,
+      signalingUrl: peer.signalingUrl,
+      nativeEndpoint: nativeEndpointForPeer(peer.peerHint),
+      trustedPeer: settings.trustedPeer
+    }).catch(() => undefined);
+  }
+
   function handleRetryAutoConnect() {
     const sessionPeerId = sessionPeerIdRef.current;
     const payload = lastAutoConnect;
@@ -849,8 +858,10 @@ export function App() {
           signalingUrl={runtimeConfig.signalingUrl}
           displayName={settings.displayName || "You"}
           peerDisplayName={peerName}
+          detectedPeers={detectedPeers}
           onBack={() => setView("main")}
           onConnect={handleConnect}
+          onConnectDetectedPeer={handleConnectDetectedPeer}
         />
       ) : null}
 

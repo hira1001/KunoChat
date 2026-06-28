@@ -156,6 +156,21 @@ Each entry should include:
 - Possible impact on other OS: macOS must also update to `v0.3.6` because the auto-start file receive fix runs on the receiver side.
 - Follow-up: Update macOS to `v0.3.6`, reconnect, and retry sending a new file. Previously cancelled transfer cards can be ignored or retried after both sides are updated.
 
+### 2026-06-28 12:50 JST - Windows
+
+- Branch: `main`
+- Summary: Changed discovery from automatic connection to explicit peer selection. LAN/Tailscale candidates now include device name, platform, source, and address metadata, and the pairing screen shows selectable devices instead of jumping back to the main screen.
+- Verified: `npm run typecheck`, `npm test` (166 passed), and `npm run build` passed locally before the `v0.3.7` version bump. Local Rust `cargo test` could not be run because `cargo` is not installed on this Windows machine.
+- Possible impact on other OS: Shared pairing behavior. Both Windows and macOS should update to `v0.3.7` so neither side auto-connects while a pairing code is being entered.
+- Follow-up: Publish `v0.3.7`, update installed apps, choose the intended peer from the pairing screen, then retry text and file transfer.
+
+### 2026-06-28 12:52 JST - Windows
+
+- Branch: `main`
+- Summary: Changed the main window close button from hide-to-tray to full application exit. The tray `Quit` command remains a full exit path.
+- Verified: Covered by the same local frontend checks above. The Rust close-event change will be compiled and tested by the release workflow.
+- Possible impact on other OS: Closing the main window now terminates the app on all desktop targets instead of leaving background discovery and servers running.
+
 ## Current Work
 
 ### Windows Codex

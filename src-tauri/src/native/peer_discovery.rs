@@ -15,6 +15,10 @@ const REEMIT_AFTER: Duration = Duration::from_secs(3);
 struct DiscoveryMessage {
     app: String,
     instance_id: String,
+    #[serde(default)]
+    device_name: Option<String>,
+    #[serde(default)]
+    platform: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -25,6 +29,8 @@ struct AutoConnectPayload {
     mode: String,
     peer_hint: String,
     source: String,
+    device_name: Option<String>,
+    platform: Option<String>,
 }
 
 pub fn start(app: AppHandle) {
@@ -50,6 +56,8 @@ async fn run_discovery(app: AppHandle) -> Result<(), String> {
     let own_message = serde_json::to_vec(&DiscoveryMessage {
         app: "KunoChat".to_string(),
         instance_id: instance_id.clone(),
+        device_name: device_name(),
+        platform: Some(platform_name().to_string()),
     })
     .map_err(|error| error.to_string())?;
     let mut interval = time::interval(Duration::from_millis(900));
@@ -103,6 +111,8 @@ async fn run_discovery(app: AppHandle) -> Result<(), String> {
                         mode: mode.to_string(),
                         peer_hint: remote_ip.to_string(),
                         source: "lan".to_string(),
+                        device_name: message.device_name,
+                        platform: message.platform,
                     },
                 );
             }
@@ -125,6 +135,31 @@ fn create_instance_id() -> String {
         .map(|value| value.as_nanos())
         .unwrap_or_default();
     format!("{}-{now}", std::process::id())
+}
+
+fn device_name() -> Option<String> {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn platform_name() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "windows"
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        "macos"
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        "linux"
+    }
 }
 
 fn local_ip_for_peer(remote_addr: SocketAddr) -> Option<IpAddr> {
@@ -192,11 +227,18 @@ mod tests {
         let message = DiscoveryMessage {
             app: "KunoChat".to_string(),
             instance_id: "abc".to_string(),
+            device_name: Some("workstation".to_string()),
+            platform: Some("windows".to_string()),
         };
         let value = serde_json::to_value(message).expect("serialize");
         assert_eq!(
             value,
-            serde_json::json!({ "app": "KunoChat", "instanceId": "abc" })
+            serde_json::json!({
+                "app": "KunoChat",
+                "instanceId": "abc",
+                "deviceName": "workstation",
+                "platform": "windows"
+            })
         );
     }
 
@@ -208,6 +250,8 @@ mod tests {
             mode: "host".to_string(),
             peer_hint: "127.0.0.2".to_string(),
             source: "lan".to_string(),
+            device_name: Some("workstation".to_string()),
+            platform: Some("windows".to_string()),
         };
         let value = serde_json::to_value(payload).expect("serialize");
         assert_eq!(
@@ -217,7 +261,9 @@ mod tests {
                 "roomId": "123456",
                 "mode": "host",
                 "peerHint": "127.0.0.2",
-                "source": "lan"
+                "source": "lan",
+                "deviceName": "workstation",
+                "platform": "windows"
             })
         );
     }

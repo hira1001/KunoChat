@@ -45,9 +45,8 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if window.label() == "main" {
-                if let WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = window.hide();
+                if let WindowEvent::CloseRequested { .. } = event {
+                    window.app_handle().exit(0);
                 }
             }
         })

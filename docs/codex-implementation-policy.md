@@ -187,6 +187,14 @@ Each entry should include:
 - Possible impact on other OS: Shared pairing behavior and native signaling server behavior. Both Windows and macOS must update to `v0.3.8` to use request/accept pairing.
 - Follow-up: Publish `v0.3.8`, update installed apps, then test selecting a peer and accepting the request from the other side before retrying file transfer.
 
+### 2026-06-28 20:48 JST - Windows
+
+- Branch: `main`
+- Summary: Published `v0.3.8` and updated the Windows installed app.
+- Verified: Release workflow `28320746080` completed successfully with Windows and macOS assets plus `latest.json`. Windows was updated with `KunoChat_0.3.8_x64-setup.exe`; `C:\Users\ymy26\AppData\Local\KunoChat\kunochat.exe` reports `ProductVersion` and `FileVersion` `0.3.8`. The app launched and is listening on TCP `8787`/`8790`. A local WebSocket `connection-request` sent to `ws://127.0.0.1:8787` returned `connection-request-ack`.
+- Possible impact on other OS: macOS must update to `v0.3.8` before request/accept pairing can be tested between machines.
+- Follow-up: From one device, open Pair and press Request on the intended peer. On the other device, press Connect in the connection request banner, then retry text and file transfer.
+
 ## Current Work
 
 ### Windows Codex

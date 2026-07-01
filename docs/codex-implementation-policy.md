@@ -203,6 +203,14 @@ Each entry should include:
 - Possible impact on other OS: Shared realtime identity handling and Tailscale discovery behavior. Both Windows and macOS should update to `v0.3.9` before retesting request/accept pairing.
 - Follow-up: Publish `v0.3.9`, update installed apps, and verify selecting a non-previously-paired peer works.
 
+### 2026-07-01 21:42 JST - Windows
+
+- Branch: `main`
+- Summary: Published `v0.3.9` and updated the Windows installed app.
+- Verified: Release workflow `28517148327` completed successfully with Windows and macOS assets plus `latest.json`. Windows was updated with `KunoChat_0.3.9_x64-setup.exe`; `C:\Users\ymy26\AppData\Local\KunoChat\kunochat.exe` reports `ProductVersion` and `FileVersion` `0.3.9`. The app launched and is listening on TCP `8787`/`8790`. A local WebSocket `connection-request` sent to `ws://127.0.0.1:8787` returned `connection-request-ack`.
+- Possible impact on other OS: macOS must update to `v0.3.9` before cross-machine pairing verification.
+- Follow-up: On both devices, confirm version `0.3.9`, then send a Request from one side and accept with Connect on the other.
+
 ## Current Work
 
 ### Windows Codex

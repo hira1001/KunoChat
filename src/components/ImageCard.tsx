@@ -1,7 +1,8 @@
-import { ImageIcon, Play, ZoomIn } from "lucide-react";
+import { ExternalLink, ImageIcon, Play, ZoomIn } from "lucide-react";
 import clsx from "clsx";
 import { formatBytes } from "../features/chat/format";
 import type { AssetContent, MessageStatus } from "../features/chat/messageTypes";
+import { platformAdapter } from "../features/native/platformAdapter";
 
 type ImageCardProps = {
   asset: AssetContent;
@@ -16,28 +17,43 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
   const messageVariant = variant === "message";
   const isActive = status === "sending" || status === "receiving";
   const isDone = status === "received" || status === "saved";
+  const openPath = asset.savePath ?? asset.localPath;
+  const localPreviewUrl = platformAdapter.filePreviewUrl(openPath, asset.mime);
+  const previewUrl = asset.previewUrl ?? localPreviewUrl ?? asset.thumbnail;
+  const isThumbnailOnly = !asset.previewUrl && !localPreviewUrl && Boolean(asset.thumbnail);
+  const canOpen = Boolean(openPath) && (status === "sent" || status === "received" || status === "saved");
 
   const isDownloadPending = status === "queued" && Boolean(onDownload);
+  const handleOpen = () => {
+    if (openPath) {
+      void platformAdapter.openPath(openPath);
+    }
+  };
 
   return (
     <div className="group w-full min-w-0 max-w-full overflow-hidden rounded-card border border-border bg-surface shadow-card transition-all duration-200 hover:shadow-window">
       {/* Image preview */}
       <div className="relative aspect-[2.55] overflow-hidden bg-surface-active">
-        {asset.previewUrl || asset.thumbnail ? (
+        {previewUrl ? (
           <>
             <img
-              src={asset.previewUrl || asset.thumbnail}
+              src={previewUrl}
               alt={asset.name}
               className={clsx(
                 "h-full w-full object-cover transition-all duration-500",
-                isActive || !asset.previewUrl ? "scale-[1.02] blur-[8px]" : "scale-100 blur-0"
+                isActive || isThumbnailOnly ? "scale-[1.02] blur-[8px]" : "scale-100 blur-0"
               )}
             />
             {/* Zoom hint on hover */}
-            {isDone && asset.previewUrl ? (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/20 group-hover:opacity-100">
+            {canOpen ? (
+              <button
+                type="button"
+                onClick={handleOpen}
+                aria-label={`${asset.name} を開く`}
+                className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/20 group-hover:opacity-100"
+              >
                 <ZoomIn className="h-6 w-6 text-white drop-shadow-lg" />
-              </div>
+              </button>
             ) : null}
           </>
         ) : (
@@ -80,6 +96,20 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
         ) : null}
       </div>
 
+      {messageVariant && canOpen ? (
+        <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2">
+          <span className="min-w-0 truncate text-[11px] text-muted">{asset.name}</span>
+          <button
+            type="button"
+            onClick={handleOpen}
+            className="kuno-focus-ring inline-flex h-7 shrink-0 items-center gap-1 rounded-input px-2 text-[11px] font-semibold text-accent transition-colors hover:bg-accent-soft"
+          >
+            <ExternalLink className="h-3 w-3" />
+            開く
+          </button>
+        </div>
+      ) : null}
+
       {/* Footer (card variant only) */}
       {!messageVariant ? (
         <div className="px-3 py-2.5">
@@ -88,7 +118,12 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
               <div className="truncate text-[13px] font-semibold tracking-[-0.01em] text-text">{asset.name}</div>
               <div className="mt-0.5 text-[11px] text-muted">{formatBytes(asset.size)}</div>
             </div>
-            <button className="kuno-focus-ring shrink-0 rounded-pill px-2.5 py-1 text-[11px] font-semibold text-accent transition-all duration-150 hover:bg-accent-soft active:scale-95">
+            <button
+              type="button"
+              onClick={canOpen ? handleOpen : undefined}
+              disabled={!canOpen}
+              className="kuno-focus-ring shrink-0 rounded-pill px-2.5 py-1 text-[11px] font-semibold text-accent transition-all duration-150 hover:bg-accent-soft active:scale-95 disabled:text-faint"
+            >
               開く
             </button>
           </div>

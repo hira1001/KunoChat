@@ -441,7 +441,23 @@ export const useChatStore = create<ChatStore>()(
                           savePath: savePath || message.asset.savePath,
                           sha256: sha256 || message.asset.sha256
                         }
-                      : message.asset
+                      : message.asset,
+                    bundle: message.bundle
+                      ? {
+                          ...message.bundle,
+                          items: message.bundle.items.map((item) =>
+                            item.transferId === transferId
+                              ? {
+                                  ...item,
+                                  progress: 100,
+                                  previewUrl: objectUrl || item.previewUrl,
+                                  savePath: savePath || item.savePath,
+                                  sha256: sha256 || item.sha256
+                                }
+                              : item
+                          )
+                        }
+                      : message.bundle
                   }
                 : message
             ),

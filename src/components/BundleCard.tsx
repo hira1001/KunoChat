@@ -1,7 +1,8 @@
-import { Files } from "lucide-react";
+import { ExternalLink, Files, FolderOpen } from "lucide-react";
 import clsx from "clsx";
 import { formatBytes } from "../features/chat/format";
 import type { BundleContent, MessageStatus } from "../features/chat/messageTypes";
+import { platformAdapter } from "../features/native/platformAdapter";
 
 type BundleCardProps = {
   bundle: BundleContent;
@@ -41,12 +42,25 @@ export function BundleCard({ bundle, status }: BundleCardProps) {
         <div className="min-w-0 flex-1 overflow-hidden">
           <div className="truncate text-[13px] font-semibold tracking-[-0.01em] text-text">{title}</div>
           <div className="mt-1.5 space-y-0.5">
-            {bundle.items.slice(0, 3).map((item) => (
-              <div key={item.id} className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted">
-                <span className="h-1 w-1 shrink-0 rounded-full bg-faint" />
-                <span className="truncate">{item.name}</span>
-              </div>
-            ))}
+            {bundle.items.slice(0, 3).map((item) => {
+              const openPath = item.savePath ?? item.localPath;
+              return (
+                <div key={item.id} className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted">
+                  <span className="h-1 w-1 shrink-0 rounded-full bg-faint" />
+                  <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                  {openPath && (status === "sent" || isDone) ? (
+                    <button
+                      type="button"
+                      aria-label={`${item.name} を開く`}
+                      onClick={() => void platformAdapter.openPath(openPath)}
+                      className="kuno-focus-ring grid h-5 w-5 shrink-0 place-items-center rounded-full text-accent transition-colors hover:bg-accent-soft"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
             {bundle.items.length > 3 ? (
               <div className="text-[11px] text-faint">+{bundle.items.length - 3} 件</div>
             ) : null}
@@ -56,6 +70,22 @@ export function BundleCard({ bundle, status }: BundleCardProps) {
             {isSending ? <span className="font-medium text-accent">送信中...</span> : null}
             {failed ? <span className="font-medium text-danger">失敗</span> : null}
             {isDone ? <span className="font-medium text-success">完了</span> : null}
+            {bundle.items.some((item) => item.savePath ?? item.localPath) && (status === "sent" || isDone) ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const firstItem = bundle.items.find((item) => item.savePath ?? item.localPath);
+                  const path = firstItem?.savePath ?? firstItem?.localPath;
+                  if (path) {
+                    void platformAdapter.revealPath(path);
+                  }
+                }}
+                className="kuno-focus-ring ml-auto inline-flex h-6 shrink-0 items-center gap-1 rounded-input px-2 text-[11px] font-semibold text-accent transition-colors hover:bg-accent-soft"
+              >
+                <FolderOpen className="h-3 w-3" />
+                場所
+              </button>
+            ) : null}
           </div>
         </div>
       </div>

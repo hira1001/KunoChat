@@ -1,7 +1,8 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { open as openNativeFile, SeekMode, type FileHandle } from "@tauri-apps/plugin-fs";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Image } from "@tauri-apps/api/image";
 
 export type PlatformName = "windows" | "macos" | "linux" | "unknown";
 
@@ -17,6 +18,7 @@ export type PickedFile = {
   size: number;
   mime: string;
   localPath?: string;
+  previewUrl?: string;
 };
 
 export type NativeFileMetadata = {
@@ -92,6 +94,63 @@ type NativePartWriter = {
 const hasTauri = "__TAURI_INTERNALS__" in window;
 let selectedSaveFolder: string | undefined;
 const partWriters = new Map<string, NativePartWriter>();
+let lastOverlayUnreadCount: number | undefined;
+
+function filePreviewUrl(path: string | undefined, mime?: string): string | undefined {
+  if (!hasTauri || !path || (mime && !mime.startsWith("image/"))) {
+    return undefined;
+  }
+  try {
+    return convertFileSrc(path);
+  } catch {
+    return undefined;
+  }
+}
+
+async function setTaskbarUnreadOverlay(count: number): Promise<void> {
+  if (!hasTauri || lastOverlayUnreadCount === count) {
+    return;
+  }
+  lastOverlayUnreadCount = count;
+  try {
+    const appWindow = getCurrentWindow();
+    if (count <= 0) {
+      await appWindow.setOverlayIcon(undefined);
+      return;
+    }
+    const image = await Image.new(createUnreadOverlayRgba(count), 32, 32);
+    await appWindow.setOverlayIcon(image);
+  } catch {
+    // Overlay icons are Windows-only; notification and mini-mode badges remain.
+  }
+}
+
+function createUnreadOverlayRgba(count: number): Uint8Array {
+  const size = 32;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return new Uint8Array(size * size * 4);
+  }
+
+  const label = count > 99 ? "99+" : String(count);
+  ctx.clearRect(0, 0, size, size);
+  ctx.fillStyle = "#ef4444";
+  ctx.beginPath();
+  ctx.arc(18, 18, 14, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "#ffffff";
+  ctx.stroke();
+  ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = `700 ${label.length >= 3 ? 11 : label.length === 2 ? 14 : 18}px system-ui, sans-serif`;
+  ctx.fillText(label, 18, 18.5);
+  return new Uint8Array(ctx.getImageData(0, 0, size, size).data);
+}
 
 async function closePartWriter(transferId: string): Promise<void> {
   const writer = partWriters.get(transferId);
@@ -164,9 +223,11 @@ export const platformAdapter = {
   },
 
   async setUnreadCount(count: number): Promise<void> {
+    const normalizedCount = Math.max(0, Math.min(99, Math.trunc(count)));
     if (hasTauri) {
-      await invoke("set_unread_count", { count: Math.max(0, Math.min(99, Math.trunc(count))) });
+      await invoke("set_unread_count", { count: normalizedCount });
     }
+    await setTaskbarUnreadOverlay(normalizedCount);
   },
 
   async needsUnreadAttention(): Promise<boolean> {
@@ -212,16 +273,20 @@ export const platformAdapter = {
           size: 0
         }));
         const name = metadata.name || fallbackName;
+        const mime = inferMime(name);
         return {
           id: `picked_${Date.now()}_${index}`,
           name,
           size: metadata.size,
-          mime: inferMime(name),
-          localPath: path
+          mime,
+          localPath: path,
+          previewUrl: filePreviewUrl(path, mime)
         };
       })
     );
   },
+
+  filePreviewUrl,
 
   async getFileMetadata(path: string): Promise<NativeFileMetadata> {
     if (!hasTauri) {

@@ -1,7 +1,8 @@
-import { AlertTriangle, CheckCircle2, Pause, Play } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ExternalLink, FolderOpen, Pause, Play } from "lucide-react";
 import clsx from "clsx";
 import { fileLabel, formatBytes } from "../features/chat/format";
 import type { AssetContent, MessageStatus } from "../features/chat/messageTypes";
+import { platformAdapter } from "../features/native/platformAdapter";
 
 type FileCardProps = {
   asset: AssetContent;
@@ -29,10 +30,24 @@ export function FileCard({ asset, status, progress, error, speed, eta, onPause, 
   const isFolder = asset.isFolder;
   const label = isFolder ? "DIR" : fileLabel(asset.name, asset.mime);
   const color = isFolder ? "bg-amber-600" : labelColor(label);
+  const openPath = asset.savePath ?? asset.localPath;
+  const canOpen = Boolean(openPath) && (status === "sent" || status === "received" || status === "saved");
 
   const formatSpeed = (bytesPerSec?: number) => {
     if (!bytesPerSec) return "";
     return `${formatBytes(bytesPerSec)}/s`;
+  };
+
+  const handleOpen = () => {
+    if (openPath) {
+      void platformAdapter.openPath(openPath);
+    }
+  };
+
+  const handleReveal = () => {
+    if (openPath) {
+      void platformAdapter.revealPath(openPath);
+    }
   };
 
   const formatEta = (seconds?: number) => {
@@ -116,6 +131,27 @@ export function FileCard({ asset, status, progress, error, speed, eta, onPause, 
                 <Play className="h-3 w-3 fill-current" />
                 {failed ? "Resume" : "Download"}
               </button>
+            ) : null}
+            {canOpen ? (
+              <>
+                <button
+                  type="button"
+                  aria-label={`${asset.name} を開く`}
+                  onClick={handleOpen}
+                  className="kuno-focus-ring inline-flex h-7 items-center gap-1 rounded-input border border-border bg-surface px-2 text-[11px] font-semibold text-accent transition-all duration-150 hover:bg-accent-soft active:scale-95"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  開く
+                </button>
+                <button
+                  type="button"
+                  aria-label={`${asset.name} の場所を表示`}
+                  onClick={handleReveal}
+                  className="kuno-focus-ring grid h-7 w-7 place-items-center rounded-full border border-border bg-surface-hover text-muted transition-all duration-150 hover:border-accent hover:text-accent active:scale-90"
+                >
+                  <FolderOpen className="h-3 w-3" />
+                </button>
+              </>
             ) : null}
             {onPause && isActive ? (
               <button

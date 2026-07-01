@@ -26,7 +26,7 @@ export function MiniPill({ status, unreadCount, activeTransferCount, onOpen }: M
       {unreadCount > 0 ? (
         <span
           aria-label={`${unreadCount} unread messages`}
-          className="grid h-5 min-w-5 shrink-0 place-items-center rounded-pill bg-accent px-1 text-[10px] font-semibold leading-none text-white"
+          className="grid h-5 min-w-5 shrink-0 place-items-center rounded-pill bg-red-500 px-1 text-[10px] font-bold leading-none text-white shadow-[0_0_0_2px_var(--bg),0_8px_18px_rgba(239,68,68,0.35)]"
         >
           {unreadLabel}
         </span>

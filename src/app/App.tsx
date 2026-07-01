@@ -10,7 +10,7 @@ import { WindowShell } from "../components/WindowShell";
 import { HistoryTab } from "../components/HistoryTab";
 import { useChatStore } from "../features/chat/chatStore";
 import { runtimeConfig } from "../features/config/runtimeConfig";
-import type { ChatMessage, DraftAttachment } from "../features/chat/messageTypes";
+import type { ChatMessage, ConnectionStatus, DraftAttachment } from "../features/chat/messageTypes";
 import { platformAdapter, type DurableTransferSession } from "../features/native/platformAdapter";
 import { realtimeClient } from "../features/realtime/realtimeClient";
 import type { RealtimeAssetMeta, RealtimeBinarySource } from "../features/realtime/realtimeTypes";
@@ -504,6 +504,7 @@ export function App() {
               const name = metadata.name || fallbackName;
               const isFolder = metadata.isDir;
               const mime = isFolder ? "application/x-directory" : platformAdapter.inferMime(name);
+              const previewUrl = platformAdapter.filePreviewUrl(path, mime);
               return {
                 id: `drop_native_${Date.now()}_${index}`,
                 kind: mime.startsWith("image/") ? "image" : "file",
@@ -511,6 +512,7 @@ export function App() {
                 size: metadata.size,
                 mime,
                 localPath: path,
+                previewUrl,
                 isFolder
               } as DraftAttachment;
             })
@@ -552,7 +554,8 @@ export function App() {
         name: file.name,
         size: file.size,
         mime: file.mime,
-        localPath: file.localPath
+        localPath: file.localPath,
+        previewUrl: file.previewUrl
       }))
     );
   }
@@ -1327,19 +1330,15 @@ function ConnectionBanner({
   onRetry
 }: {
   diagnostic?: ConnectionDiagnostic;
-  status: string;
+  status: ConnectionStatus;
   onPair: () => void;
   onRetry: () => void;
 }) {
-  if (!diagnostic) {
+  if (!diagnostic && status === "connected") {
     return null;
   }
 
-  const activeDiagnostic = diagnostic;
-
-  if (!activeDiagnostic) {
-    return null;
-  }
+  const activeDiagnostic = diagnostic ?? reconnectDiagnostic(status);
   const toneClass =
     activeDiagnostic.tone === "danger"
       ? "border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-950/30 dark:text-red-200"
@@ -1356,15 +1355,37 @@ function ConnectionBanner({
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           <button type="button" onClick={onRetry} className="kuno-focus-ring rounded-input bg-white/80 px-2.5 py-1 text-[11px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
-            Retry
+            再接続
           </button>
           <button type="button" onClick={onPair} className="kuno-focus-ring rounded-input bg-white/80 px-2.5 py-1 text-[11px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
-            Pair
+            接続先を選ぶ
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+function reconnectDiagnostic(status: ConnectionStatus): ConnectionDiagnostic {
+  if (status === "connecting" || status === "reconnecting") {
+    return {
+      tone: "warning",
+      title: "再接続中",
+      detail: "前回の接続先へ接続しています。別の相手に繋ぐ場合は「接続先を選ぶ」を押してください。"
+    };
+  }
+  if (status === "failed" || status === "offline") {
+    return {
+      tone: "warning",
+      title: "接続が切れています",
+      detail: "同じ相手へ戻すなら「再接続」、別のPCへ繋ぐなら「接続先を選ぶ」を押してください。"
+    };
+  }
+  return {
+    tone: "info",
+    title: "未接続です",
+    detail: "接続先を選ぶか、相手からの接続依頼を待ってください。"
+  };
 }
 
 function createPairingCode(): string {

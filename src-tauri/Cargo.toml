@@ -1,6 +1,6 @@
 [package]
 name = "kunochat"
-version = "0.3.9"
+version = "0.3.10"
 description = "KunoChat desktop app"
 authors = ["KunoChat"]
 edition = "2021"

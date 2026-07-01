@@ -445,9 +445,6 @@ export function App() {
         setDetectedPeers((peers) => upsertDetectedPeer(peers, event.payload));
       }),
       listen<ConnectionRequestPayload>("kuno:connection-request", (event) => {
-        if (useChatStore.getState().connectionStatus === "connected") {
-          return;
-        }
         setConnectionRequest(event.payload);
         setDiagnostic({
           tone: "info",
@@ -674,15 +671,6 @@ export function App() {
       if (session.direction !== "outgoing" || session.status === "failed") {
         continue;
       }
-      if (session.peerFingerprint && state.settings.trustedPeer?.fingerprint !== session.peerFingerprint) {
-        state.failTransfer({
-          messageId: session.messageId,
-          transferId: session.transferId,
-          message: "以前の転送先PCと一致しないため、再開を停止しました。"
-        });
-        continue;
-      }
-
       const message = state.messages.find((candidate) => candidate.id === session.messageId && candidate.sender === "me");
       const asset = message?.asset?.transferId === session.transferId
         ? message.asset
@@ -735,6 +723,9 @@ export function App() {
     if (!sessionPeerId) {
       return;
     }
+    if (useChatStore.getState().connectionStatus === "connected") {
+      realtimeClient.disconnect();
+    }
     const selectedPeer = lastAutoConnect;
     const detectedPeerUrl = selectedPeer?.peerHint ? signalingUrlForPeer(selectedPeer.peerHint) : undefined;
     if (selectedPeer) {
@@ -771,6 +762,10 @@ export function App() {
       mode: "join" as const,
       signalingUrl
     };
+
+    if (useChatStore.getState().connectionStatus === "connected") {
+      realtimeClient.disconnect();
+    }
 
     setLastAutoConnect(peer);
     setDiagnostic({
@@ -836,6 +831,10 @@ export function App() {
     const sessionPeerId = sessionPeerIdRef.current;
     if (!request || !sessionPeerId) {
       return;
+    }
+
+    if (useChatStore.getState().connectionStatus === "connected") {
+      realtimeClient.disconnect();
     }
 
     setConnectionRequest(undefined);

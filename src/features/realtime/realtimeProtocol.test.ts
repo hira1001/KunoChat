@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { decodeBinaryChunk, encodeBinaryChunk, identityHelloChanged } from "./realtimeClient";
+import { decodeBinaryChunk, encodeBinaryChunk, identityHelloChanged, identityTrustStatus } from "./realtimeClient";
 
 function bytes(values: number[]) {
   return new Uint8Array(values).buffer;
@@ -79,5 +79,16 @@ describe("device identity hello handling", () => {
     expect(identityHelloChanged(undefined, existing)).toBe("new");
     expect(identityHelloChanged(existing, { ...existing, senderId: "peer_other" })).toBe("identity");
     expect(identityHelloChanged(existing, { ...existing, publicKey: "c".repeat(64) })).toBe("identity");
+  });
+
+  test("allows a newly selected peer even when another trusted peer is stored", () => {
+    const trustedPeer = {
+      publicKey: "a".repeat(64),
+      fingerprint: "aa:bb",
+      verifiedAt: Date.now()
+    };
+
+    expect(identityTrustStatus(trustedPeer, { publicKey: "a".repeat(64), fingerprint: "aa:bb" })).toBe("trusted");
+    expect(identityTrustStatus(trustedPeer, { publicKey: "b".repeat(64), fingerprint: "cc:dd" })).toBe("new");
   });
 });

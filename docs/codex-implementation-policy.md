@@ -195,6 +195,14 @@ Each entry should include:
 - Possible impact on other OS: macOS must update to `v0.3.8` before request/accept pairing can be tested between machines.
 - Follow-up: From one device, open Pair and press Request on the intended peer. On the other device, press Connect in the connection request banner, then retry text and file transfer.
 
+### 2026-07-01 21:15 JST - Windows
+
+- Branch: `main`
+- Summary: Fixed two remaining connection blockers in the request/accept flow. A stored trusted peer no longer rejects a newly selected device, and Tailscale discovery now emits every reachable online peer instead of only the lowest internal ID.
+- Verified: `npm run typecheck`, `npm test` (167 passed), and `npm run build` passed locally. Local Rust `cargo test` could not be run because `cargo` is not installed on this Windows machine.
+- Possible impact on other OS: Shared realtime identity handling and Tailscale discovery behavior. Both Windows and macOS should update to `v0.3.9` before retesting request/accept pairing.
+- Follow-up: Publish `v0.3.9`, update installed apps, and verify selecting a non-previously-paired peer works.
+
 ## Current Work
 
 ### Windows Codex

@@ -857,6 +857,7 @@ export function App() {
       localPeerId: sessionPeerId,
       displayName: settings.displayName || "You",
       mode: "host",
+      signalingUrl: runtimeConfig.signalingUrl,
       nativeEndpoint: nativeEndpointForPeer(request.peerHint),
       trustedPeer: settings.trustedPeer
     }).catch(() => undefined);

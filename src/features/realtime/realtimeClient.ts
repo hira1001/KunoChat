@@ -8,6 +8,7 @@ import type {
   RealtimeConnectOptions,
   RealtimeControlMessage,
   RealtimePeer,
+  RealtimeTrustedPeer,
   RealtimeTextPayload
 } from "./realtimeTypes";
 
@@ -66,6 +67,20 @@ export function identityHelloChanged(
     return "identity";
   }
   return "same";
+}
+
+export function identityTrustStatus(
+  trustedPeer: RealtimeTrustedPeer | undefined,
+  remote: { publicKey: string; fingerprint: string }
+): "new" | "trusted" {
+  if (
+    trustedPeer &&
+    trustedPeer.publicKey.toLowerCase() === remote.publicKey.toLowerCase() &&
+    trustedPeer.fingerprint === remote.fingerprint
+  ) {
+    return "trusted";
+  }
+  return "new";
 }
 
 function hexToBytes(value: string): Uint8Array {
@@ -1185,17 +1200,9 @@ class KunoRealtimeClient {
     }
 
     const trustedPeer = options.trustedPeer;
-    if (
-      trustedPeer &&
-      (trustedPeer.publicKey.toLowerCase() !== identity.remote.publicKey || trustedPeer.fingerprint !== identity.remote.fingerprint)
-    ) {
-      this.rejectIdentity("The paired device identity no longer matches. Pair again only after confirming the other device.", identity.remote.fingerprint, identity.remote.publicKey);
-      return;
-    }
-
     identity.verified = true;
     this.callbacks?.onIdentity({
-      status: trustedPeer ? "trusted" : "new",
+      status: identityTrustStatus(trustedPeer, identity.remote),
       publicKey: identity.remote.publicKey,
       fingerprint: identity.remote.fingerprint
     });

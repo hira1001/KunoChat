@@ -78,35 +78,34 @@ async fn run_discovery(app: AppHandle) {
         let Ok(status) = read_tailscale_status() else {
             continue;
         };
-        let Some(candidate) = select_candidate(&status) else {
-            continue;
-        };
-        if !is_kunochat_reachable(&candidate.probe_host) {
-            continue;
-        }
+        for candidate in select_candidates(&status) {
+            if !is_kunochat_reachable(&candidate.probe_host) {
+                continue;
+            }
 
-        let key = format!(
-            "{}:{}:{}",
-            candidate.signaling_url, candidate.room_id, candidate.mode
-        );
-        let now = Instant::now();
-        if !should_emit_candidate(&last_candidate, &key, now) {
-            continue;
-        }
-        last_candidate = Some((key, now));
+            let key = format!(
+                "{}:{}:{}",
+                candidate.signaling_url, candidate.room_id, candidate.mode
+            );
+            let now = Instant::now();
+            if !should_emit_candidate(&last_candidate, &key, now) {
+                continue;
+            }
+            last_candidate = Some((key, now));
 
-        let _ = app.emit(
-            "kuno:auto-connect",
-            AutoConnectPayload {
-                signaling_url: candidate.signaling_url,
-                room_id: candidate.room_id,
-                mode: candidate.mode,
-                peer_hint: candidate.peer_hint,
-                source: "tailscale".to_string(),
-                device_name: candidate.device_name,
-                platform: candidate.platform,
-            },
-        );
+            let _ = app.emit(
+                "kuno:auto-connect",
+                AutoConnectPayload {
+                    signaling_url: candidate.signaling_url,
+                    room_id: candidate.room_id,
+                    mode: candidate.mode,
+                    peer_hint: candidate.peer_hint,
+                    source: "tailscale".to_string(),
+                    device_name: candidate.device_name,
+                    platform: candidate.platform,
+                },
+            );
+        }
     }
 }
 
@@ -181,14 +180,16 @@ fn tailscale_command_candidates() -> Vec<&'static str> {
     candidates
 }
 
-fn select_candidate(status: &TailscaleStatus) -> Option<TailscaleCandidate> {
+fn select_candidates(status: &TailscaleStatus) -> Vec<TailscaleCandidate> {
     let self_id = status.self_node.id.trim();
-    let self_ip = first_tailscale_ip(&status.self_node)?;
+    let Some(self_ip) = first_tailscale_ip(&status.self_node) else {
+        return Vec::new();
+    };
     if self_id.is_empty() {
-        return None;
+        return Vec::new();
     }
 
-    let peer = status
+    let mut peers = status
         .peer
         .values()
         .filter(|peer| peer.online)
@@ -206,24 +207,30 @@ fn select_candidate(status: &TailscaleStatus) -> Option<TailscaleCandidate> {
                 platform_from_tailscale_os(peer),
             ))
         })
-        .min_by(|left, right| left.0.cmp(&right.0))?;
-    let (peer_id, peer_ip, peer_hint, device_name, platform) = peer;
-    let server_ip = if self_id <= peer_id.as_str() {
-        self_ip
-    } else {
-        peer_ip.as_str()
-    };
-    let mode = if server_ip == self_ip { "host" } else { "join" };
+        .collect::<Vec<_>>();
+    peers.sort_by(|left, right| left.0.cmp(&right.0));
 
-    Some(TailscaleCandidate {
-        signaling_url: format!("ws://{server_ip}:{SIGNALING_PORT}"),
-        room_id: room_id_for_pair(self_id, &peer_id),
-        mode: mode.to_string(),
-        peer_hint,
-        probe_host: peer_ip,
-        device_name,
-        platform,
-    })
+    peers
+        .into_iter()
+        .map(|(peer_id, peer_ip, peer_hint, device_name, platform)| {
+            let server_ip = if self_id <= peer_id.as_str() {
+                self_ip
+            } else {
+                peer_ip.as_str()
+            };
+            let mode = if server_ip == self_ip { "host" } else { "join" };
+
+            TailscaleCandidate {
+                signaling_url: format!("ws://{server_ip}:{SIGNALING_PORT}"),
+                room_id: room_id_for_pair(self_id, &peer_id),
+                mode: mode.to_string(),
+                peer_hint,
+                probe_host: peer_ip,
+                device_name,
+                platform,
+            }
+        })
+        .collect()
 }
 
 fn first_tailscale_ip(node: &TailscaleNode) -> Option<&str> {
@@ -306,7 +313,7 @@ mod tests {
             self_node: node("self", "100.64.0.1", "self.tailnet.ts.net.", true),
             peer: HashMap::new(),
         };
-        assert!(select_candidate(&status).is_none());
+        assert!(select_candidates(&status).is_empty());
     }
 
     #[test]
@@ -320,7 +327,7 @@ mod tests {
             self_node: node("self", "100.64.0.1", "self.tailnet.ts.net.", true),
             peer,
         };
-        let candidate = select_candidate(&status).expect("candidate");
+        let candidate = select_candidates(&status).into_iter().next().expect("candidate");
         assert_eq!(candidate.peer_hint, "peer.tailnet.ts.net");
         assert_eq!(candidate.room_id.len(), 6);
     }
@@ -336,7 +343,7 @@ mod tests {
             self_node: node("self", "100.64.0.1", "self.tailnet.ts.net.", true),
             peer,
         };
-        assert!(select_candidate(&status).is_none());
+        assert!(select_candidates(&status).is_empty());
     }
 
     #[test]
@@ -350,7 +357,7 @@ mod tests {
             self_node: node("a-self", "100.64.0.1", "self.tailnet.ts.net.", true),
             peer,
         };
-        let candidate = select_candidate(&status).expect("candidate");
+        let candidate = select_candidates(&status).into_iter().next().expect("candidate");
         assert_eq!(candidate.mode, "host");
         assert_eq!(candidate.signaling_url, "ws://100.64.0.1:8787");
     }
@@ -366,9 +373,31 @@ mod tests {
             self_node: node("z-self", "100.64.0.1", "self.tailnet.ts.net.", true),
             peer,
         };
-        let candidate = select_candidate(&status).expect("candidate");
+        let candidate = select_candidates(&status).into_iter().next().expect("candidate");
         assert_eq!(candidate.mode, "join");
         assert_eq!(candidate.signaling_url, "ws://100.64.0.2:8787");
+    }
+
+    #[test]
+    fn selects_all_online_peers() {
+        let mut peer = HashMap::new();
+        peer.insert(
+            "first".to_string(),
+            node("b-peer", "100.64.0.2", "first.tailnet.ts.net.", true),
+        );
+        peer.insert(
+            "second".to_string(),
+            node("c-peer", "100.64.0.3", "second.tailnet.ts.net.", true),
+        );
+        let status = TailscaleStatus {
+            self_node: node("a-self", "100.64.0.1", "self.tailnet.ts.net.", true),
+            peer,
+        };
+
+        let candidates = select_candidates(&status);
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].peer_hint, "first.tailnet.ts.net");
+        assert_eq!(candidates[1].peer_hint, "second.tailnet.ts.net");
     }
 
     #[test]

@@ -25,10 +25,20 @@ describe("delivery strategy", () => {
   });
 
   test("sends small text over relay instead of waiting for P2P setup", () => {
-    expect(chooseDeliveryRoute(context({ p2pConnectingMs: 100 }))).toMatchObject({
+    expect(chooseDeliveryRoute(context({ profile: "internet_fallback", p2pConnectingMs: 100 }))).toMatchObject({
       route: "relay",
       ackTarget: "relay",
       reason: "relay_for_small_payload",
+      startP2PInBackground: true
+    });
+  });
+
+  test("keeps small text local while reconnecting in home LAN mode", () => {
+    expect(chooseDeliveryRoute(context({ p2pConnectingMs: 100 }))).toMatchObject({
+      route: "local_queue",
+      ackTarget: "local",
+      reason: "give_p2p_first_chance",
+      retryAfterMs: 1100,
       startP2PInBackground: true
     });
   });
@@ -57,6 +67,7 @@ describe("delivery strategy", () => {
         context({
           payloadKind: "file",
           sizeBytes: 20 * 1024 * 1024,
+          profile: "internet_fallback",
           p2pConnectingMs: 1500
         })
       )
@@ -68,10 +79,19 @@ describe("delivery strategy", () => {
   });
 
   test("stores offline payloads when cloud store-and-forward can accept them", () => {
-    expect(chooseDeliveryRoute(context({ peerOnline: false }))).toMatchObject({
+    expect(chooseDeliveryRoute(context({ profile: "internet_fallback", peerOnline: false }))).toMatchObject({
       route: "store_forward",
       ackTarget: "store",
       reason: "store_forward_offline"
+    });
+  });
+
+  test("keeps offline payloads local by default for home LAN use", () => {
+    expect(chooseDeliveryRoute(context({ peerOnline: false }))).toMatchObject({
+      route: "local_queue",
+      ackTarget: "local",
+      reason: "no_remote_route",
+      startP2PInBackground: false
     });
   });
 
@@ -80,6 +100,7 @@ describe("delivery strategy", () => {
       chooseDeliveryRoute(
         context({
           peerOnline: false,
+          profile: "internet_fallback",
           payloadKind: "file",
           sizeBytes: 300 * 1024 * 1024
         })

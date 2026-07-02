@@ -1,5 +1,7 @@
 export type DeliveryPayloadKind = "control" | "text" | "image" | "file";
 
+export type DeliveryProfile = "home_lan" | "internet_fallback";
+
 export type DeliveryRoute = "p2p" | "relay" | "store_forward" | "local_queue";
 
 export type DeliveryAckTarget = "peer" | "relay" | "store" | "local";
@@ -20,6 +22,7 @@ export type DeliveryDecision = {
 };
 
 export type DeliveryContext = {
+  profile?: DeliveryProfile;
   payloadKind: DeliveryPayloadKind;
   sizeBytes: number;
   peerOnline: boolean;
@@ -38,12 +41,14 @@ const DEFAULT_STORE_FORWARD_MAX_BYTES = 25 * 1024 * 1024;
 const INSTANT_PAYLOAD_BYTES = 64 * 1024;
 
 export function chooseDeliveryRoute(input: DeliveryContext): DeliveryDecision {
+  const profile = input.profile ?? "home_lan";
   const p2pFallbackMs = input.p2pFallbackMs ?? DEFAULT_P2P_FALLBACK_MS;
   const relayMaxBytes = input.relayMaxBytes ?? DEFAULT_RELAY_MAX_BYTES;
   const storeForwardMaxBytes = input.storeForwardMaxBytes ?? DEFAULT_STORE_FORWARD_MAX_BYTES;
+  const cloudRoutesEnabled = profile === "internet_fallback";
   const cloudEligible = input.sizeBytes <= Math.max(relayMaxBytes, storeForwardMaxBytes);
-  const relayEligible = input.relayAvailable && input.sizeBytes <= relayMaxBytes;
-  const storeEligible = input.storeForwardAvailable && input.sizeBytes <= storeForwardMaxBytes;
+  const relayEligible = cloudRoutesEnabled && input.relayAvailable && input.sizeBytes <= relayMaxBytes;
+  const storeEligible = cloudRoutesEnabled && input.storeForwardAvailable && input.sizeBytes <= storeForwardMaxBytes;
   const instantPayload = input.payloadKind === "control" || input.payloadKind === "text" || input.sizeBytes <= INSTANT_PAYLOAD_BYTES;
 
   if (input.p2pReady) {

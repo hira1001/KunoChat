@@ -19,8 +19,9 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
   const isDone = status === "received" || status === "saved";
   const openPath = asset.savePath ?? asset.localPath;
   const localPreviewUrl = platformAdapter.filePreviewUrl(openPath, asset.mime);
-  const previewUrl = asset.previewUrl ?? localPreviewUrl ?? asset.thumbnail;
-  const isThumbnailOnly = !asset.previewUrl && !localPreviewUrl && Boolean(asset.thumbnail);
+  const storedPreviewUrl = asset.previewUrl?.startsWith("blob:") && openPath ? undefined : asset.previewUrl;
+  const previewUrl = localPreviewUrl ?? storedPreviewUrl ?? asset.thumbnail;
+  const isThumbnailOnly = !localPreviewUrl && !storedPreviewUrl && Boolean(asset.thumbnail);
   const canOpen = Boolean(openPath) && (status === "sent" || status === "received" || status === "saved");
 
   const isDownloadPending = status === "queued" && Boolean(onDownload);

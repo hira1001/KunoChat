@@ -247,6 +247,28 @@ describe("chatStore", () => {
     expect(useChatStore.getState().messages[0]).toMatchObject({ status: "received", progress: 100, asset: { savePath: "/tmp/a.pdf" } });
   });
 
+  test("does not persist expired blob preview URLs", () => {
+    useChatStore.getState().receivePeerAsset({
+      id: "asset_msg",
+      transferId: "tr_1",
+      senderId: "peer",
+      senderName: "Taro",
+      createdAt: 1,
+      kind: "image",
+      name: "a.png",
+      size: 42,
+      mime: "image/png"
+    });
+    useChatStore.getState().completeTransfer({ messageId: "asset_msg", transferId: "tr_1", objectUrl: "blob:http://tauri.localhost/a", savePath: "/tmp/a.png" });
+
+    const partialized = useChatStore.persist.getOptions().partialize?.(useChatStore.getState()) as {
+      messages: Array<{ asset?: { previewUrl?: string; savePath?: string } }>;
+    };
+
+    expect(partialized.messages[0].asset).toMatchObject({ savePath: "/tmp/a.png" });
+    expect(partialized.messages[0].asset?.previewUrl).toBeUndefined();
+  });
+
   test("stores late transfer hash when a transfer completes", () => {
     useChatStore.getState().receivePeerAsset({ id: "asset_msg", transferId: "tr_1", senderId: "peer", senderName: "Taro", createdAt: 1, kind: "file", name: "a.pdf", size: 42, mime: "application/pdf" });
     useChatStore.getState().completeTransfer({ messageId: "asset_msg", transferId: "tr_1", sha256: "verified-hash" });

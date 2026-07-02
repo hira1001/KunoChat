@@ -1108,8 +1108,11 @@ function sanitizePersistedConversationDrafts(value: unknown, activeConversationI
   };
 }
 
-function withoutFile<T extends { file?: File }>(asset: T): T {
+function withoutFile<T extends { file?: File; previewUrl?: string }>(asset: T): T {
   const { file: _file, ...persistedAsset } = asset;
+  if (persistedAsset.previewUrl?.startsWith("blob:")) {
+    delete persistedAsset.previewUrl;
+  }
   return persistedAsset as T;
 }
 

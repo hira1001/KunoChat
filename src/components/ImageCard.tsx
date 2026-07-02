@@ -3,6 +3,7 @@ import clsx from "clsx";
 import { formatBytes } from "../features/chat/format";
 import type { AssetContent, MessageStatus } from "../features/chat/messageTypes";
 import { platformAdapter } from "../features/native/platformAdapter";
+import { useLocalImagePreview } from "./useLocalImagePreview";
 
 type ImageCardProps = {
   asset: AssetContent;
@@ -18,7 +19,7 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
   const isActive = status === "sending" || status === "receiving";
   const isDone = status === "received" || status === "saved";
   const openPath = asset.savePath ?? asset.localPath;
-  const localPreviewUrl = platformAdapter.filePreviewUrl(openPath, asset.mime);
+  const localPreviewUrl = useLocalImagePreview(openPath, asset.mime);
   const storedPreviewUrl = asset.previewUrl?.startsWith("blob:") && openPath ? undefined : asset.previewUrl;
   const previewUrl = localPreviewUrl ?? storedPreviewUrl ?? asset.thumbnail;
   const isThumbnailOnly = !localPreviewUrl && !storedPreviewUrl && Boolean(asset.thumbnail);

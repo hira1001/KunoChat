@@ -280,13 +280,32 @@ export const platformAdapter = {
           size: metadata.size,
           mime,
           localPath: path,
-          previewUrl: filePreviewUrl(path, mime)
+          previewUrl: undefined
         };
       })
     );
   },
 
   filePreviewUrl,
+
+  async createImagePreviewUrl(path: string | undefined, mime: string | undefined, maxBytes: number): Promise<string | undefined> {
+    if (!hasTauri || !path || !mime?.startsWith("image/") || !Number.isFinite(maxBytes) || maxBytes <= 0) {
+      return undefined;
+    }
+
+    const metadata = await this.getFileMetadata(path).catch(() => undefined);
+    const size = metadata?.size ?? 0;
+    if (!Number.isSafeInteger(size) || size <= 0 || size > maxBytes) {
+      return undefined;
+    }
+
+    const bytes = await this.readEntireFile(path, size).catch(() => undefined);
+    if (!bytes) {
+      return undefined;
+    }
+
+    return URL.createObjectURL(new Blob([bytes], { type: mime }));
+  },
 
   async getFileMetadata(path: string): Promise<NativeFileMetadata> {
     if (!hasTauri) {

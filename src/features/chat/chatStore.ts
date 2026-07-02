@@ -259,15 +259,29 @@ export const useChatStore = create<ChatStore>()(
           let nextTransferStates = state.transferStates;
           let nextDeliveryOutbox = state.deliveryOutbox;
           for (const messageId of interruptedIds) {
-            const failedState = failMessageState(
-              { messages: nextMessages, transferStates: nextTransferStates, deliveryOutbox: nextDeliveryOutbox },
-              messageId,
-              message,
-              "connection_interrupted"
-            );
-            nextMessages = failedState.messages;
-            nextTransferStates = failedState.transferStates;
-            nextDeliveryOutbox = failedState.deliveryOutbox;
+            const target = nextMessages.find((chatMessage) => chatMessage.id === messageId);
+            if (target && isRetryableMessage(target)) {
+              const queuedMessage = resetMessageForRetry(target, "queued", {
+                code: pendingConnectionError.code,
+                message
+              });
+              nextMessages = nextMessages.map((chatMessage) => (chatMessage.id === messageId ? queuedMessage : chatMessage));
+              nextTransferStates = {
+                ...nextTransferStates,
+                ...transferStatesForRetry(queuedMessage, "queued")
+              };
+              nextDeliveryOutbox = upsertOutboxForRetry(nextDeliveryOutbox, queuedMessage, state.conversations, "local_queued");
+            } else {
+              const failedState = failMessageState(
+                { messages: nextMessages, transferStates: nextTransferStates, deliveryOutbox: nextDeliveryOutbox },
+                messageId,
+                message,
+                "connection_interrupted"
+              );
+              nextMessages = failedState.messages;
+              nextTransferStates = failedState.transferStates;
+              nextDeliveryOutbox = failedState.deliveryOutbox;
+            }
           }
 
           return {
@@ -342,7 +356,7 @@ export const useChatStore = create<ChatStore>()(
           if (state.messages.some((message) => message.id === input.id)) {
             return state;
           }
-          const conversationId = conversationIdForPeer(input.senderId);
+          const conversationId = conversationIdForIncomingPeer(state.conversations, input.senderId, state.activeConversationId, state.connectionStatus);
           const active = state.activeConversationId === conversationId;
           const unreadIncrement = active && state.currentView !== "mini" ? 0 : 1;
           const nextConversations = touchConversation(state.conversations, {
@@ -392,7 +406,7 @@ export const useChatStore = create<ChatStore>()(
             status: "queued",
             isFolder: input.isFolder
           });
-          const conversationId = conversationIdForPeer(input.senderId);
+          const conversationId = conversationIdForIncomingPeer(state.conversations, input.senderId, state.activeConversationId, state.connectionStatus);
           const active = state.activeConversationId === conversationId;
           const unreadIncrement = active && state.currentView !== "mini" ? 0 : 1;
           const nextConversations = touchConversation(state.conversations, {
@@ -1092,6 +1106,7 @@ function sanitizePersistedConversations(value: unknown, fallbackName = "Peer"): 
         source: conversation.source,
         platform: conversation.platform,
         fingerprint: conversation.fingerprint,
+        trustedPeer: sanitizeTrustedPeer(conversation.trustedPeer),
         unreadCount: Math.max(0, Math.min(99, Math.trunc(conversation.unreadCount ?? 0))),
         lastMessageAt: conversation.lastMessageAt,
         lastMessagePreview: conversation.lastMessagePreview,
@@ -1528,6 +1543,52 @@ function conversationIdForPeer(value: string | undefined): string {
     return DEFAULT_CONVERSATION_ID;
   }
   return `peer_${value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 96)}`;
+}
+
+function conversationIdForIncomingPeer(
+  conversations: ConversationSummary[],
+  senderId: string,
+  activeConversationId: string,
+  connectionStatus: ConnectionStatus
+): string {
+  const canonicalId = conversationIdForPeer(senderId);
+  const existing = conversations.find((conversation) => conversation.id === canonicalId || conversation.peerId === senderId);
+  if (existing) {
+    return existing.id;
+  }
+
+  const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
+  if (
+    activeConversation &&
+    activeConversation.id !== DEFAULT_CONVERSATION_ID &&
+    activeConversation.peerHint &&
+    (connectionStatus === "connected" || connectionStatus === "connecting" || connectionStatus === "reconnecting")
+  ) {
+    return activeConversation.id;
+  }
+
+  return canonicalId;
+}
+
+function sanitizeTrustedPeer(value: unknown): TrustedPeer | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const trustedPeer = value as Partial<TrustedPeer>;
+  const verifiedAt = trustedPeer.verifiedAt;
+  if (
+    typeof trustedPeer.publicKey !== "string" ||
+    typeof trustedPeer.fingerprint !== "string" ||
+    typeof verifiedAt !== "number" ||
+    !Number.isFinite(verifiedAt)
+  ) {
+    return undefined;
+  }
+  return {
+    publicKey: trustedPeer.publicKey,
+    fingerprint: trustedPeer.fingerprint,
+    verifiedAt
+  };
 }
 
 function upsertConversation(conversations: ConversationSummary[], next: ConversationSummary): ConversationSummary[] {

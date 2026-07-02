@@ -245,6 +245,38 @@ describe("chatStore", () => {
     expect(second?.trustedPeer).toBeUndefined();
   });
 
+  test("restores trusted peers from persisted conversations", () => {
+    const merge = useChatStore.persist.getOptions().merge!;
+    const merged = merge(
+      {
+        storageVersion: 3,
+        activeConversationId: "peer_peer_a",
+        conversations: [
+          {
+            id: "peer_peer_a",
+            displayName: "Peer A",
+            peerId: "peer_a",
+            source: "lan",
+            unreadCount: 0,
+            trustedPeer: {
+              publicKey: "key-a",
+              fingerprint: "fp-a",
+              verifiedAt: 100
+            }
+          }
+        ],
+        messages: []
+      },
+      useChatStore.getState()
+    ) as ReturnType<typeof useChatStore.getState>;
+
+    expect(merged.conversations[0].trustedPeer).toMatchObject({
+      publicKey: "key-a",
+      fingerprint: "fp-a",
+      verifiedAt: 100
+    });
+  });
+
   test("uses unique random message ids even when sends share a timestamp", async () => {
     useChatStore.setState({ draftText: "first" });
     await useChatStore.getState().sendDraft();
@@ -337,6 +369,41 @@ describe("chatStore", () => {
     expect(peerBConversation?.id).toBeTruthy();
     expect(messages.find((message) => message.id === "peer_a_msg")?.conversationId).toBe(peerAConversation?.id);
     expect(messages.find((message) => message.id === "peer_b_msg")?.conversationId).toBe(peerBConversation?.id);
+  });
+
+  test("keeps the first inbound reply in the active IP-based conversation", () => {
+    const conversationId = useChatStore.getState().activateConversation({
+      peerId: "192.168.1.20",
+      peerHint: "192.168.1.20",
+      displayName: "Win PC",
+      source: "lan"
+    });
+    useChatStore.setState({ connectionStatus: "connected" });
+
+    useChatStore.getState().receivePeerText({
+      id: "reply_1",
+      senderId: "peer_stable_win",
+      senderName: "Win PC",
+      createdAt: 1,
+      text: "hello"
+    });
+    useChatStore.getState().receivePeerText({
+      id: "reply_2",
+      senderId: "peer_stable_win",
+      senderName: "Win PC",
+      createdAt: 2,
+      text: "again"
+    });
+
+    const conversations = useChatStore.getState().conversations;
+    const activeConversation = conversations.find((conversation) => conversation.id === conversationId);
+    expect(useChatStore.getState().messages.map((message) => message.conversationId)).toEqual([conversationId, conversationId]);
+    expect(activeConversation).toMatchObject({
+      id: conversationId,
+      peerId: "peer_stable_win",
+      peerHint: "192.168.1.20"
+    });
+    expect(conversations.some((conversation) => conversation.id === "peer_peer_stable_win")).toBe(false);
   });
 
   test("stores peer display name from received text", () => {
@@ -482,7 +549,7 @@ describe("chatStore", () => {
     });
   });
 
-  test("marks interrupted outgoing messages as retryable failures", async () => {
+  test("queues interrupted outgoing messages for automatic resend", async () => {
     useChatStore.setState({ connectionStatus: "connected", draftText: "hello" });
     void useChatStore.getState().sendDraft(() => new Promise(() => undefined));
     await Promise.resolve();
@@ -490,9 +557,19 @@ describe("chatStore", () => {
     useChatStore.getState().markInterruptedTransfers("lost link");
 
     expect(useChatStore.getState().messages[0]).toMatchObject({
-      status: "failed",
-      error: { code: "connection_interrupted", message: "lost link" }
+      status: "queued",
+      error: { code: "pending_connection", message: "lost link" }
     });
+    expect(useChatStore.getState().deliveryOutbox[0]).toMatchObject({
+      status: "local_queued",
+      route: "local_queue"
+    });
+
+    const transport = vi.fn();
+    await useChatStore.getState().retryMessage(useChatStore.getState().messages[0].id, transport);
+
+    expect(transport).toHaveBeenCalledWith(expect.objectContaining({ status: "sending" }));
+    expect(useChatStore.getState().messages[0]).toMatchObject({ status: "sent", error: undefined });
   });
 
   test("retries a failed text message", async () => {

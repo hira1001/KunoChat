@@ -7,10 +7,13 @@ import type {
   ConversationDraft,
   ConversationSummary,
   ConnectionStatus,
+  DeliveryOutboxRecord,
+  DeliveryOutboxStatus,
   DraftAttachment,
   KunoSettings,
   TransferError,
-  TransferState
+  TransferState,
+  TrustedPeer
 } from "./messageTypes";
 import { dbService, type TransferHistoryItem } from "../storage/db";
 import { platformAdapter } from "../native/platformAdapter";
@@ -23,6 +26,7 @@ type ChatStore = {
   conversations: ConversationSummary[];
   conversationDrafts: Record<string, ConversationDraft>;
   messages: ChatMessage[];
+  deliveryOutbox: DeliveryOutboxRecord[];
   draftText: string;
   attachments: DraftAttachment[];
   transferStates: Record<string, TransferState>;
@@ -42,6 +46,7 @@ type ChatStore = {
     platform?: string;
     fingerprint?: string;
   }) => string;
+  setConversationTrustedPeer: (conversationId: string, trustedPeer: TrustedPeer) => void;
   incrementUnread: () => void;
   clearUnread: () => void;
   setPeerTyping: (isTyping: boolean, at?: number) => void;
@@ -115,6 +120,7 @@ export const useChatStore = create<ChatStore>()(
         [DEFAULT_CONVERSATION_ID]: { draftText: "", attachments: [] }
       },
       messages: [],
+      deliveryOutbox: [],
       draftText: "",
       attachments: [],
       transferStates: {},
@@ -173,6 +179,7 @@ export const useChatStore = create<ChatStore>()(
             source: input.source ?? existing?.source ?? "unknown",
             platform: input.platform ?? existing?.platform,
             fingerprint: input.fingerprint ?? existing?.fingerprint,
+            trustedPeer: existing?.trustedPeer,
             unreadCount: existing?.unreadCount ?? 0,
             lastMessageAt: existing?.lastMessageAt,
             lastMessagePreview: existing?.lastMessagePreview,
@@ -196,6 +203,12 @@ export const useChatStore = create<ChatStore>()(
         });
         return conversationId;
       },
+      setConversationTrustedPeer: (conversationId, trustedPeer) =>
+        set((state) => ({
+          conversations: state.conversations.map((conversation) =>
+            conversation.id === conversationId ? { ...conversation, trustedPeer } : conversation
+          )
+        })),
       incrementUnread: () => set((state) => ({ unreadCount: Math.min(state.unreadCount + 1, 99) })),
       clearUnread: () =>
         set((state) => {
@@ -220,11 +233,13 @@ export const useChatStore = create<ChatStore>()(
             }
           }
 
+          const nextDeliveryOutbox = updateOutboxStatusForMessage(state.deliveryOutbox, target, status);
           return {
             messages: state.messages.map((message) =>
               message.id === messageId ? { ...message, status, error: status === "failed" ? message.error : undefined } : message
             ),
-            transferStates: nextTransferStates
+            transferStates: nextTransferStates,
+            deliveryOutbox: nextDeliveryOutbox
           };
         }),
       failMessage: (messageId, message, code = "send_failed") =>
@@ -242,20 +257,23 @@ export const useChatStore = create<ChatStore>()(
 
           let nextMessages = state.messages;
           let nextTransferStates = state.transferStates;
+          let nextDeliveryOutbox = state.deliveryOutbox;
           for (const messageId of interruptedIds) {
             const failedState = failMessageState(
-              { messages: nextMessages, transferStates: nextTransferStates },
+              { messages: nextMessages, transferStates: nextTransferStates, deliveryOutbox: nextDeliveryOutbox },
               messageId,
               message,
               "connection_interrupted"
             );
             nextMessages = failedState.messages;
             nextTransferStates = failedState.transferStates;
+            nextDeliveryOutbox = failedState.deliveryOutbox;
           }
 
           return {
             messages: nextMessages,
-            transferStates: nextTransferStates
+            transferStates: nextTransferStates,
+            deliveryOutbox: nextDeliveryOutbox
           };
         }),
       cancelMessage: (messageId, notify) => {
@@ -285,6 +303,7 @@ export const useChatStore = create<ChatStore>()(
           const queuedMessage = resetMessageForRetry(message, "queued", pendingConnectionError);
           set((state) => ({
             messages: state.messages.map((chatMessage) => (chatMessage.id === messageId ? queuedMessage : chatMessage)),
+            deliveryOutbox: upsertOutboxForRetry(state.deliveryOutbox, queuedMessage, state.conversations, "local_queued"),
             transferStates: {
               ...state.transferStates,
               ...transferStatesForRetry(queuedMessage, "queued")
@@ -296,6 +315,7 @@ export const useChatStore = create<ChatStore>()(
         const retryingMessage = resetMessageForRetry(message);
         set((state) => ({
           messages: state.messages.map((chatMessage) => (chatMessage.id === messageId ? retryingMessage : chatMessage)),
+          deliveryOutbox: upsertOutboxForRetry(state.deliveryOutbox, retryingMessage, state.conversations, "p2p_sending"),
           transferStates: {
             ...state.transferStates,
             ...transferStatesForRetry(retryingMessage)
@@ -788,10 +808,11 @@ export const useChatStore = create<ChatStore>()(
         }
 
         const now = Date.now();
+        const messageId = createMessageId();
         const pendingConnection = connectionStatus !== "connected";
         const optimisticStatus = pendingConnection ? "queued" : "sending";
         const baseMessage = {
-          id: `msg_${now}`,
+          id: messageId,
           conversationId: activeConversationId,
           sender: "me" as const,
           senderId: settings.localPeerId,
@@ -801,7 +822,7 @@ export const useChatStore = create<ChatStore>()(
           error: pendingConnection ? pendingConnectionError : undefined
         };
 
-        const bundleTransferId = `tr_${now}`;
+        const bundleTransferId = createTransferId();
         const message: ChatMessage =
           attachments.length > 1 || (attachments.length === 1 && trimmed)
             ? {
@@ -821,7 +842,7 @@ export const useChatStore = create<ChatStore>()(
                     localPath: attachment.localPath,
                     previewUrl: attachment.previewUrl,
                     file: attachment.file,
-                    transferId: `${bundleTransferId}_${index}`
+                    transferId: createTransferId()
                   }))
                 }
               }
@@ -838,7 +859,7 @@ export const useChatStore = create<ChatStore>()(
                     localPath: attachments[0].localPath,
                     previewUrl: attachments[0].previewUrl,
                     file: attachments[0].file,
-                    transferId: `tr_${now}`
+                    transferId: createTransferId()
                   }
                 }
               : {
@@ -886,6 +907,7 @@ export const useChatStore = create<ChatStore>()(
           return {
             messages: [...state.messages, message],
             conversations: nextConversations,
+            deliveryOutbox: upsertOutboxForMessage(state.deliveryOutbox, message, nextConversations, pendingConnection ? "local_queued" : "p2p_sending"),
             draftText: "",
             attachments: [],
             conversationDrafts: {
@@ -921,7 +943,7 @@ export const useChatStore = create<ChatStore>()(
         set((state) => ({
           settings: { ...state.settings, ...settings }
         })),
-      clearHistory: () => set({ messages: [] }),
+      clearHistory: () => set({ messages: [], deliveryOutbox: [] }),
       loadHistory: async () => {
         const history = await dbService.getTransfersHistory();
         set({ history });
@@ -950,6 +972,7 @@ export const useChatStore = create<ChatStore>()(
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         messages: serializeMessagesForStorage(state.messages),
+        deliveryOutbox: state.deliveryOutbox,
         storageVersion: state.storageVersion,
         activeConversationId: state.activeConversationId,
         conversations: state.conversations,
@@ -993,6 +1016,7 @@ export const useChatStore = create<ChatStore>()(
           draftText: activeDraft.draftText,
           attachments: activeDraft.attachments,
           transferStates: sanitizePersistedTransferStates(persistedState?.transferStates),
+          deliveryOutbox: sanitizePersistedOutbox(persistedState?.deliveryOutbox, migratedMessages, conversations),
           isDraggingOver: false,
           peerTyping: false,
           peerTypingAt: 0,
@@ -1132,17 +1156,226 @@ function sanitizePersistedTransferStates(value: unknown): Record<string, Transfe
   );
 }
 
+function sanitizePersistedOutbox(value: unknown, messages: ChatMessage[], conversations: ConversationSummary[]): DeliveryOutboxRecord[] {
+  const records = Array.isArray(value) ? value.filter(isDeliveryOutboxRecord).map(normalizeOutboxRecord) : [];
+  const byMessageId = new Map(records.map((record) => [record.messageId, record]));
+  const recovered = messages.flatMap((message) => {
+    if (message.sender !== "me" || byMessageId.has(message.id) || message.status === "received" || message.status === "saved") {
+      return [];
+    }
+    const outboxStatus = outboxStatusForMessage(message);
+    return outboxStatus ? [createOutboxRecord(message, conversations, outboxStatus)] : [];
+  });
+  return [...records, ...recovered].sort((left, right) => left.createdAt - right.createdAt);
+}
+
+function isDeliveryOutboxRecord(value: unknown): value is DeliveryOutboxRecord {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Partial<DeliveryOutboxRecord>;
+  return (
+    typeof record.id === "string" &&
+    typeof record.messageId === "string" &&
+    typeof record.conversationId === "string" &&
+    isDeliveryOutboxStatus(record.status) &&
+    Number.isFinite(record.sizeBytes) &&
+    Number.isFinite(record.attempts) &&
+    typeof record.idempotencyKey === "string" &&
+    Number.isFinite(record.createdAt) &&
+    Number.isFinite(record.updatedAt)
+  );
+}
+
+function normalizeOutboxRecord(record: DeliveryOutboxRecord): DeliveryOutboxRecord {
+  const route = record.status === "local_queued" ? "local_queue" : "p2p";
+  return {
+    ...record,
+    payloadKind: record.payloadKind === "image" || record.payloadKind === "file" ? record.payloadKind : "text",
+    route,
+    attempts: Math.max(0, Math.floor(record.attempts)),
+    sizeBytes: Math.max(0, record.sizeBytes),
+    updatedAt: record.updatedAt || record.createdAt
+  };
+}
+
+function isDeliveryOutboxStatus(value: unknown): value is DeliveryOutboxStatus {
+  return (
+    value === "local_queued" ||
+    value === "p2p_sending" ||
+    value === "peer_delivered" ||
+    value === "failed_retryable" ||
+    value === "failed_final" ||
+    value === "cancelled"
+  );
+}
+
+function upsertOutboxForMessage(
+  outbox: DeliveryOutboxRecord[],
+  message: ChatMessage,
+  conversations: ConversationSummary[],
+  status: DeliveryOutboxStatus
+): DeliveryOutboxRecord[] {
+  if (message.sender !== "me") {
+    return outbox;
+  }
+  const existing = outbox.find((record) => record.messageId === message.id);
+  const now = Date.now();
+  if (existing) {
+    return outbox.map((record) =>
+      record.messageId === message.id
+        ? {
+            ...record,
+            status,
+            route: routeForOutboxStatus(status),
+            attempts: status === "p2p_sending" ? record.attempts + 1 : record.attempts,
+            lastAttemptAt: status === "p2p_sending" ? now : record.lastAttemptAt,
+            nextRetryAt: undefined,
+            errorCode: undefined,
+            errorMessage: undefined,
+            updatedAt: now
+          }
+        : record
+    );
+  }
+  return [...outbox, createOutboxRecord(message, conversations, status)];
+}
+
+function upsertOutboxForRetry(
+  outbox: DeliveryOutboxRecord[],
+  message: ChatMessage,
+  conversations: ConversationSummary[],
+  status: DeliveryOutboxStatus
+): DeliveryOutboxRecord[] {
+  return upsertOutboxForMessage(outbox, message, conversations, status);
+}
+
+function createOutboxRecord(
+  message: ChatMessage,
+  conversations: ConversationSummary[],
+  status: DeliveryOutboxStatus
+): DeliveryOutboxRecord {
+  const conversationId = message.conversationId ?? DEFAULT_CONVERSATION_ID;
+  const conversation = conversations.find((candidate) => candidate.id === conversationId);
+  const now = Date.now();
+  return {
+    id: `out_${crypto.randomUUID()}`,
+    messageId: message.id,
+    conversationId,
+    recipientPeerId: conversation?.peerId,
+    recipientPeerHint: conversation?.peerHint,
+    payloadKind: payloadKindForMessage(message),
+    sizeBytes: payloadSizeForMessage(message),
+    route: routeForOutboxStatus(status),
+    status,
+    attempts: status === "p2p_sending" ? 1 : 0,
+    lastAttemptAt: status === "p2p_sending" ? now : undefined,
+    idempotencyKey: `idem_${crypto.randomUUID()}`,
+    createdAt: message.createdAt,
+    updatedAt: now
+  };
+}
+
+function updateOutboxStatusForMessage(
+  outbox: DeliveryOutboxRecord[],
+  message: ChatMessage | undefined,
+  status: ChatMessage["status"]
+): DeliveryOutboxRecord[] {
+  if (!message || message.sender !== "me") {
+    return outbox;
+  }
+  const nextStatus = outboxStatusForMessage({ ...message, status });
+  if (!nextStatus) {
+    return outbox;
+  }
+  const now = Date.now();
+  return outbox.map((record) =>
+    record.messageId === message.id
+      ? {
+          ...record,
+          status: nextStatus,
+          route: routeForOutboxStatus(nextStatus),
+          updatedAt: now,
+          attempts: nextStatus === "p2p_sending" && record.status !== "p2p_sending" ? record.attempts + 1 : record.attempts,
+          lastAttemptAt: nextStatus === "p2p_sending" ? (record.lastAttemptAt ?? now) : record.lastAttemptAt,
+          errorCode: nextStatus === "failed_retryable" ? message.error?.code : undefined,
+          errorMessage: nextStatus === "failed_retryable" ? message.error?.message : undefined
+        }
+      : record
+  );
+}
+
+function failOutboxRecords(outbox: DeliveryOutboxRecord[], messageId: string, code: string, message: string): DeliveryOutboxRecord[] {
+  const now = Date.now();
+  return outbox.map((record) =>
+    record.messageId === messageId
+      ? {
+          ...record,
+          status: "failed_retryable",
+          errorCode: code,
+          errorMessage: message,
+          nextRetryAt: now + 3000,
+          updatedAt: now
+        }
+      : record
+  );
+}
+
+function outboxStatusForMessage(message: ChatMessage): DeliveryOutboxStatus | undefined {
+  if (message.status === "received" || message.status === "saved") {
+    return "peer_delivered";
+  }
+  if (message.status === "cancelled") {
+    return "cancelled";
+  }
+  if (message.status === "failed") {
+    return "failed_retryable";
+  }
+  if (message.status === "queued" && message.error?.code === pendingConnectionError.code) {
+    return "local_queued";
+  }
+  if (message.status === "sending" || message.status === "sent" || message.status === "queued") {
+    return "p2p_sending";
+  }
+  return undefined;
+}
+
+function routeForOutboxStatus(status: DeliveryOutboxStatus): DeliveryOutboxRecord["route"] {
+  return status === "local_queued" ? "local_queue" : "p2p";
+}
+
+function payloadKindForMessage(message: ChatMessage): DeliveryOutboxRecord["payloadKind"] {
+  if (message.kind === "image" || message.asset?.kind === "image") {
+    return "image";
+  }
+  if (message.kind === "file" || message.bundle) {
+    return "file";
+  }
+  return "text";
+}
+
+function payloadSizeForMessage(message: ChatMessage): number {
+  if (message.asset) {
+    return message.asset.size;
+  }
+  if (message.bundle) {
+    return message.bundle.totalSize;
+  }
+  return message.text?.length ?? 0;
+}
+
 function failMessageState(
-  state: Pick<ChatStore, "messages" | "transferStates">,
+  state: Pick<ChatStore, "messages" | "transferStates" | "deliveryOutbox">,
   messageId: string,
   message: string,
   code: string
-): Pick<ChatStore, "messages" | "transferStates"> {
+): Pick<ChatStore, "messages" | "transferStates" | "deliveryOutbox"> {
   const target = state.messages.find((chatMessage) => chatMessage.id === messageId);
   if (!target) {
     return {
       messages: state.messages,
-      transferStates: state.transferStates
+      transferStates: state.transferStates,
+      deliveryOutbox: state.deliveryOutbox
     };
   }
 
@@ -1166,20 +1399,22 @@ function failMessageState(
           }
         : chatMessage
     ),
-    transferStates: nextTransferStates
+    transferStates: nextTransferStates,
+    deliveryOutbox: failOutboxRecords(state.deliveryOutbox, messageId, code, message)
   };
 }
 
 function cancelMessageState(
-  state: Pick<ChatStore, "messages" | "transferStates">,
+  state: Pick<ChatStore, "messages" | "transferStates" | "deliveryOutbox">,
   messageId: string,
   message: string
-): Pick<ChatStore, "messages" | "transferStates"> {
+): Pick<ChatStore, "messages" | "transferStates" | "deliveryOutbox"> {
   const target = state.messages.find((chatMessage) => chatMessage.id === messageId);
   if (!target) {
     return {
       messages: state.messages,
-      transferStates: state.transferStates
+      transferStates: state.transferStates,
+      deliveryOutbox: state.deliveryOutbox
     };
   }
 
@@ -1202,7 +1437,8 @@ function cancelMessageState(
           }
         : chatMessage
     ),
-    transferStates: nextTransferStates
+    transferStates: nextTransferStates,
+    deliveryOutbox: updateOutboxStatusForMessage(state.deliveryOutbox, target, "cancelled")
   };
 }
 
@@ -1352,6 +1588,14 @@ function messagePreview(message: ChatMessage): string {
     return message.bundle.caption || `${message.bundle.count} files`;
   }
   return "KunoChat";
+}
+
+function createMessageId(): string {
+  return `msg_${crypto.randomUUID()}`;
+}
+
+function createTransferId(): string {
+  return `tr_${crypto.randomUUID()}`;
 }
 
 function createLocalPeerId(): string {

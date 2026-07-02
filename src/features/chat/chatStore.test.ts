@@ -33,6 +33,7 @@ function resetStore() {
       [DEFAULT_CONVERSATION_ID]: { draftText: "", attachments: [] }
     },
     messages: [],
+    deliveryOutbox: [],
     draftText: "",
     attachments: [],
     transferStates: {},
@@ -139,6 +140,32 @@ describe("chatStore", () => {
     expect(useChatStore.getState().draftText).toBe("");
   });
 
+  test("records disconnected sends in the durable local outbox", async () => {
+    const conversationId = useChatStore.getState().activateConversation({
+      peerId: "peer_a",
+      peerHint: "192.168.1.20",
+      displayName: "Peer A",
+      source: "lan"
+    });
+    useChatStore.getState().setDraftText("hello");
+
+    await useChatStore.getState().sendDraft();
+
+    const message = useChatStore.getState().messages[0];
+    expect(useChatStore.getState().deliveryOutbox[0]).toMatchObject({
+      messageId: message.id,
+      conversationId,
+      recipientPeerId: "peer_a",
+      recipientPeerHint: "192.168.1.20",
+      payloadKind: "text",
+      route: "local_queue",
+      status: "local_queued",
+      attempts: 0
+    });
+    expect(useChatStore.getState().deliveryOutbox[0].id).toMatch(/^out_[0-9a-f-]{36}$/i);
+    expect(useChatStore.getState().deliveryOutbox[0].idempotencyKey).toMatch(/^idem_[0-9a-f-]{36}$/i);
+  });
+
   test("keeps offline queued messages pending when connection changes", async () => {
     useChatStore.getState().setDraftText("hello");
     await useChatStore.getState().sendDraft();
@@ -183,6 +210,57 @@ describe("chatStore", () => {
     expect(useChatStore.getState().messages[0]).toMatchObject({ kind: "text", status: "sent" });
   });
 
+  test("tracks connected sends until peer acknowledgement", async () => {
+    useChatStore.setState({ connectionStatus: "connected", draftText: "hello" });
+    await useChatStore.getState().sendDraft(vi.fn());
+    const message = useChatStore.getState().messages[0];
+
+    expect(useChatStore.getState().deliveryOutbox[0]).toMatchObject({
+      messageId: message.id,
+      route: "p2p",
+      status: "p2p_sending",
+      attempts: 1
+    });
+
+    useChatStore.getState().markMessageStatus(message.id, "received");
+
+    expect(useChatStore.getState().deliveryOutbox[0]).toMatchObject({
+      messageId: message.id,
+      status: "peer_delivered"
+    });
+  });
+
+  test("stores trusted peers per conversation", () => {
+    const firstConversationId = useChatStore.getState().activateConversation({ peerId: "peer_a", displayName: "Peer A" });
+    const secondConversationId = useChatStore.getState().activateConversation({ peerId: "peer_b", displayName: "Peer B" });
+    useChatStore.getState().setConversationTrustedPeer(firstConversationId, {
+      publicKey: "key-a",
+      fingerprint: "fp-a",
+      verifiedAt: 100
+    });
+
+    const first = useChatStore.getState().conversations.find((conversation) => conversation.id === firstConversationId);
+    const second = useChatStore.getState().conversations.find((conversation) => conversation.id === secondConversationId);
+    expect(first?.trustedPeer).toMatchObject({ publicKey: "key-a", fingerprint: "fp-a" });
+    expect(second?.trustedPeer).toBeUndefined();
+  });
+
+  test("uses unique random message ids even when sends share a timestamp", async () => {
+    useChatStore.setState({ draftText: "first" });
+    await useChatStore.getState().sendDraft();
+    useChatStore.setState({ draftText: "second" });
+    await useChatStore.getState().sendDraft();
+
+    const messages = useChatStore.getState().messages;
+    expect(messages.map((message) => message.createdAt)).toEqual([
+      new Date("2026-06-11T12:00:00Z").getTime(),
+      new Date("2026-06-11T12:00:00Z").getTime()
+    ]);
+    expect(messages[0].id).not.toBe(messages[1].id);
+    expect(messages[0].id).toMatch(/^msg_[0-9a-f-]{36}$/i);
+    expect(messages[1].id).toMatch(/^msg_[0-9a-f-]{36}$/i);
+  });
+
   test("marks text failed when transport rejects", async () => {
     useChatStore.setState({ connectionStatus: "connected", draftText: "hello" });
     await useChatStore.getState().sendDraft(() => Promise.reject(new Error("nope")));
@@ -225,6 +303,19 @@ describe("chatStore", () => {
 
     const items = useChatStore.getState().messages[0].bundle?.items ?? [];
     expect(new Set(items.map((item) => item.transferId)).size).toBe(items.length);
+    expect(items.every((item) => /^tr_[0-9a-f-]{36}$/i.test(item.transferId))).toBe(true);
+  });
+
+  test("uses unique random transfer ids when file sends share a timestamp", async () => {
+    useChatStore.setState({ connectionStatus: "connected", attachments: [attachment({ id: "file_1" })] });
+    await useChatStore.getState().sendDraft(vi.fn());
+    useChatStore.setState({ attachments: [attachment({ id: "file_2" })] });
+    await useChatStore.getState().sendDraft(vi.fn());
+
+    const transferIds = useChatStore.getState().messages.map((message) => message.asset?.transferId);
+    expect(transferIds[0]).toMatch(/^tr_[0-9a-f-]{36}$/i);
+    expect(transferIds[1]).toMatch(/^tr_[0-9a-f-]{36}$/i);
+    expect(transferIds[0]).not.toBe(transferIds[1]);
   });
 
   test("deduplicates received text by message id", () => {

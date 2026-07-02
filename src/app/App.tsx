@@ -10,7 +10,7 @@ import { WindowShell } from "../components/WindowShell";
 import { HistoryTab } from "../components/HistoryTab";
 import { DEFAULT_CONVERSATION_ID, useChatStore } from "../features/chat/chatStore";
 import { runtimeConfig } from "../features/config/runtimeConfig";
-import type { ChatMessage, ConnectionStatus, ConversationSummary, DraftAttachment } from "../features/chat/messageTypes";
+import type { ChatMessage, ConnectionStatus, ConversationSummary, DraftAttachment, TrustedPeer } from "../features/chat/messageTypes";
 import { platformAdapter, type DurableTransferSession } from "../features/native/platformAdapter";
 import { realtimeClient } from "../features/realtime/realtimeClient";
 import type { RealtimeAssetMeta, RealtimeBinarySource } from "../features/realtime/realtimeTypes";
@@ -108,6 +108,7 @@ export function App() {
     setConnectionStatus,
     selectConversation,
     activateConversation,
+    setConversationTrustedPeer,
     clearUnread,
     setPeerTyping,
     markMessageStatus,
@@ -274,13 +275,12 @@ export function App() {
           });
           return;
         }
-        updateSettings({
-          trustedPeer: {
-            publicKey: identity.publicKey,
-            fingerprint: identity.fingerprint,
-            verifiedAt: Date.now()
-          }
-        });
+        const trustedPeer: TrustedPeer = {
+          publicKey: identity.publicKey,
+          fingerprint: identity.fingerprint,
+          verifiedAt: Date.now()
+        };
+        setConversationTrustedPeer(useChatStore.getState().activeConversationId, trustedPeer);
       },
       onText: (input) => {
         if (useChatStore.getState().messages.some((message) => message.id === input.id)) {
@@ -421,7 +421,7 @@ export function App() {
       localPeerId: sessionPeerId,
       displayName: settings.displayName || "You",
       mode: "host",
-      trustedPeer: settings.trustedPeer
+      trustedPeer: trustedPeerForActiveConversation()
     }).catch(() => undefined);
   }, [currentView, connectionStatus, pairingCode, settings.displayName, settings.localPeerId]);
 
@@ -507,7 +507,7 @@ export function App() {
               const mime = isFolder ? "application/x-directory" : platformAdapter.inferMime(name);
               const previewUrl = platformAdapter.filePreviewUrl(path, mime);
               return {
-                id: `drop_native_${Date.now()}_${index}`,
+                id: `drop_native_${crypto.randomUUID()}`,
                 kind: mime.startsWith("image/") ? "image" : "file",
                 name,
                 size: metadata.size,
@@ -628,6 +628,15 @@ export function App() {
     }
   }
 
+  function trustedPeerForActiveConversation(): TrustedPeer | undefined {
+    return trustedPeerForConversation(useChatStore.getState().activeConversationId);
+  }
+
+  function trustedPeerForConversation(conversationId: string): TrustedPeer | undefined {
+    const state = useChatStore.getState();
+    return state.conversations.find((conversation) => conversation.id === conversationId)?.trustedPeer ?? state.settings.trustedPeer;
+  }
+
   async function attentionIsNeeded(): Promise<boolean> {
     const epoch = unreadEpochRef.current;
     const miniMode = useChatStore.getState().currentView === "mini";
@@ -740,7 +749,7 @@ export function App() {
       mode: "join",
       signalingUrl: detectedPeerUrl,
       nativeEndpoint: selectedPeer?.peerHint ? nativeEndpointForPeer(selectedPeer.peerHint) : undefined,
-      trustedPeer: settings.trustedPeer
+      trustedPeer: trustedPeerForActiveConversation()
     }).catch(() => undefined);
   }
 
@@ -798,7 +807,7 @@ export function App() {
         mode: "join",
         signalingUrl,
         nativeEndpoint: nativeEndpointForPeer(peer.peerHint),
-        trustedPeer: settings.trustedPeer
+        trustedPeer: trustedPeerForConversation(useChatStore.getState().activeConversationId)
       }).catch(() => undefined);
     } catch (error) {
       setConnectionStatus("failed");
@@ -825,7 +834,7 @@ export function App() {
       mode: payload.mode,
       signalingUrl: payload.signalingUrl,
       nativeEndpoint: nativeEndpointForPeer(payload.peerHint),
-      trustedPeer: settings.trustedPeer
+      trustedPeer: trustedPeerForConversation(useChatStore.getState().activeConversationId)
     }).catch(() => undefined);
   }
 
@@ -889,7 +898,7 @@ export function App() {
         mode: "join",
         signalingUrl,
         nativeEndpoint: nativeEndpointForPeer(conversation.peerHint),
-        trustedPeer: settings.trustedPeer
+        trustedPeer: trustedPeerForConversation(conversation.id)
       });
     } catch (error) {
       setConnectionStatus("failed");
@@ -942,7 +951,7 @@ export function App() {
       mode: "host",
       signalingUrl: runtimeConfig.signalingUrl,
       nativeEndpoint: nativeEndpointForPeer(request.peerHint),
-      trustedPeer: settings.trustedPeer
+      trustedPeer: trustedPeerForActiveConversation()
     }).catch(() => undefined);
   }
 
@@ -995,6 +1004,23 @@ export function App() {
     await sendDraft(async (message) => {
       await sendRealtimeMessage(message);
     });
+    await kickActiveConversationDelivery();
+  }
+
+  async function kickActiveConversationDelivery() {
+    const state = useChatStore.getState();
+    if (state.connectionStatus === "connected") {
+      await flushPendingConnectionMessages();
+      return;
+    }
+    if (state.connectionStatus === "connecting" || state.connectionStatus === "reconnecting") {
+      return;
+    }
+
+    const conversation = state.conversations.find((candidate) => candidate.id === state.activeConversationId);
+    if (conversation?.peerHint) {
+      void reconnectConversation(conversation);
+    }
   }
 
   async function handleRetryMessage(messageId: string) {

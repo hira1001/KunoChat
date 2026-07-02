@@ -77,6 +77,12 @@ export type TransferError = {
   message: string;
 };
 
+export type TrustedPeer = {
+  publicKey: string;
+  fingerprint: string;
+  verifiedAt: number;
+};
+
 export type ChatMessage = {
   id: string;
   conversationId?: string;
@@ -107,6 +113,35 @@ export type ConversationSummary = {
   lastMessageAt?: number;
   lastMessagePreview?: string;
   connectionStatus?: ConnectionStatus;
+  trustedPeer?: TrustedPeer;
+};
+
+export type DeliveryOutboxStatus =
+  | "local_queued"
+  | "p2p_sending"
+  | "peer_delivered"
+  | "failed_retryable"
+  | "failed_final"
+  | "cancelled";
+
+export type DeliveryOutboxRecord = {
+  id: string;
+  messageId: string;
+  conversationId: string;
+  recipientPeerId?: string;
+  recipientPeerHint?: string;
+  payloadKind: "text" | "image" | "file";
+  sizeBytes: number;
+  route: "p2p" | "local_queue";
+  status: DeliveryOutboxStatus;
+  attempts: number;
+  lastAttemptAt?: number;
+  nextRetryAt?: number;
+  idempotencyKey: string;
+  errorCode?: string;
+  errorMessage?: string;
+  createdAt: number;
+  updatedAt: number;
 };
 
 export type ConversationDraft = {
@@ -153,9 +188,5 @@ export type KunoSettings = {
   sound: boolean;
   shortcut: string;
   theme: "light" | "dark";
-  trustedPeer?: {
-    publicKey: string;
-    fingerprint: string;
-    verifiedAt: number;
-  };
+  trustedPeer?: TrustedPeer;
 };

@@ -20,9 +20,10 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, o
   const mine = message.sender === "me";
   const transferState = useChatStore((state) => state.transferStates[message.asset?.transferId || ""]);
   const isAsset = message.kind === "file" || message.kind === "image" || message.kind === "bundle";
+  const waitingForConnection = message.status === "queued" && message.error?.code === "pending_connection";
   const canRetry = mine && (message.status === "failed" || message.status === "cancelled") && Boolean(onRetry);
   const canCancel = mine && (message.status === "sending" || message.status === "queued") && Boolean(onCancel);
-  const isPaused = message.status === "queued" && mine;
+  const isPaused = isAsset && message.status === "queued" && mine && !waitingForConnection;
   const canPause = mine && message.status === "sending" && Boolean(onPause);
   const canResume = mine && isPaused && Boolean(onResume);
   const canDownload = !mine && (message.status === "queued" || message.status === "failed") && Boolean(onDownload);

@@ -9,6 +9,7 @@ import type {
   ConnectionStatus,
   DraftAttachment,
   KunoSettings,
+  TransferError,
   TransferState
 } from "./messageTypes";
 import { dbService, type TransferHistoryItem } from "../storage/db";
@@ -97,6 +98,10 @@ const defaultSettings: KunoSettings = {
 };
 
 const currentStorageVersion = 3;
+const pendingConnectionError = {
+  code: "pending_connection",
+  message: "接続後に自動送信されます。"
+};
 
 export const useChatStore = create<ChatStore>()(
   persist(
@@ -227,7 +232,12 @@ export const useChatStore = create<ChatStore>()(
       markInterruptedTransfers: (message = "接続が中断されました。Retryで再送できます。") =>
         set((state) => {
           const interruptedIds = state.messages
-            .filter((chatMessage) => chatMessage.sender === "me" && (chatMessage.status === "sending" || chatMessage.status === "queued"))
+            .filter(
+              (chatMessage) =>
+                chatMessage.sender === "me" &&
+                (chatMessage.status === "sending" ||
+                  (chatMessage.status === "queued" && chatMessage.error?.code !== pendingConnectionError.code))
+            )
             .map((chatMessage) => chatMessage.id);
 
           let nextMessages = state.messages;
@@ -261,17 +271,25 @@ export const useChatStore = create<ChatStore>()(
       retryMessage: async (messageId, transport) => {
         const { connectionStatus, messages } = get();
         const message = messages.find((chatMessage) => chatMessage.id === messageId);
-        if (!message || message.sender !== "me" || (message.status !== "failed" && message.status !== "cancelled")) {
-          return;
-        }
-
-        if (connectionStatus !== "connected") {
-          get().failMessage(messageId, "相手と再接続してから再送してください。", "not_connected");
+        const queuedForConnection = message?.status === "queued" && message.error?.code === pendingConnectionError.code;
+        if (!message || message.sender !== "me" || (message.status !== "failed" && message.status !== "cancelled" && !queuedForConnection)) {
           return;
         }
 
         if (!isRetryableMessage(message)) {
           get().failMessage(messageId, "このファイルは再送に必要なローカル参照がありません。もう一度選択してください。", "payload_unavailable");
+          return;
+        }
+
+        if (connectionStatus !== "connected") {
+          const queuedMessage = resetMessageForRetry(message, "queued", pendingConnectionError);
+          set((state) => ({
+            messages: state.messages.map((chatMessage) => (chatMessage.id === messageId ? queuedMessage : chatMessage)),
+            transferStates: {
+              ...state.transferStates,
+              ...transferStatesForRetry(queuedMessage, "queued")
+            }
+          }));
           return;
         }
 
@@ -770,34 +788,8 @@ export const useChatStore = create<ChatStore>()(
         }
 
         const now = Date.now();
-        if (connectionStatus !== "connected") {
-          const warningMessage: ChatMessage = {
-            id: `sys_${now}`,
-            conversationId: activeConversationId,
-            kind: "system",
-            sender: "system",
-            senderId: "system",
-            senderName: "KunoChat",
-            createdAt: now,
-            status: "failed",
-            text: {
-              text: "相手と接続してから送信してください。本文やファイルは未接続のまま外部へ送られません。",
-              plainText: "相手と接続してから送信してください。本文やファイルは未接続のまま外部へ送られません。",
-              length: 38
-            },
-            error: {
-              code: "not_connected",
-              message: "Peer connection is not established."
-            }
-          };
-
-          set((state) => ({
-            messages: [...state.messages, warningMessage]
-          }));
-          return;
-        }
-
-        const optimisticStatus = "sending";
+        const pendingConnection = connectionStatus !== "connected";
+        const optimisticStatus = pendingConnection ? "queued" : "sending";
         const baseMessage = {
           id: `msg_${now}`,
           conversationId: activeConversationId,
@@ -805,7 +797,8 @@ export const useChatStore = create<ChatStore>()(
           senderId: settings.localPeerId,
           senderName: settings.displayName || "You",
           createdAt: now,
-          status: optimisticStatus as ChatMessage["status"]
+          status: optimisticStatus as ChatMessage["status"],
+          error: pendingConnection ? pendingConnectionError : undefined
         };
 
         const bundleTransferId = `tr_${now}`;
@@ -865,7 +858,7 @@ export const useChatStore = create<ChatStore>()(
             size: message.asset.size,
             direction: "out",
             peerName: settings.peerDisplayName || "Peer",
-            status: "sending",
+            status: pendingConnection ? "queued" : "sending",
             isFolder: message.asset.isFolder
           });
         } else if (message.bundle) {
@@ -876,7 +869,7 @@ export const useChatStore = create<ChatStore>()(
               size: item.size,
               direction: "out",
               peerName: settings.peerDisplayName || "Peer",
-              status: "sending",
+              status: pendingConnection ? "queued" : "sending",
               isFolder: item.isFolder
             });
           }
@@ -904,6 +897,10 @@ export const useChatStore = create<ChatStore>()(
             }
           };
         });
+
+        if (pendingConnection) {
+          return;
+        }
 
         if (!transport) {
           get().failMessage(message.id, "送信経路が準備できていません。", "transport_missing");
@@ -1232,12 +1229,12 @@ function isRetryableMessage(message: ChatMessage): boolean {
   return false;
 }
 
-function resetMessageForRetry(message: ChatMessage): ChatMessage {
+function resetMessageForRetry(message: ChatMessage, status: ChatMessage["status"] = "sending", error?: TransferError): ChatMessage {
   return {
     ...message,
-    status: "sending",
+    status,
     progress: 0,
-    error: undefined,
+    error,
     asset: message.asset ? { ...message.asset, progress: 0 } : message.asset,
     bundle: message.bundle
       ? {
@@ -1248,12 +1245,12 @@ function resetMessageForRetry(message: ChatMessage): ChatMessage {
   };
 }
 
-function transferStatesForRetry(message: ChatMessage): Record<string, TransferState> {
+function transferStatesForRetry(message: ChatMessage, status: TransferState["status"] = "sending"): Record<string, TransferState> {
   const states: Record<string, TransferState> = {};
   if (message.asset) {
     states[message.asset.transferId] = {
       transferId: message.asset.transferId,
-      status: "sending",
+      status,
       progress: 0,
       size: message.asset.size,
       mime: message.asset.mime,
@@ -1265,7 +1262,7 @@ function transferStatesForRetry(message: ChatMessage): Record<string, TransferSt
     for (const item of message.bundle.items) {
       states[item.transferId] = {
         transferId: item.transferId,
-        status: "sending",
+        status,
         progress: 0,
         size: item.size,
         mime: item.mime,

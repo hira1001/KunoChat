@@ -128,10 +128,47 @@ describe("chatStore", () => {
     expect(useChatStore.getState().messages).toHaveLength(0);
   });
 
-  test("blocks sending while disconnected", async () => {
+  test("queues text while disconnected", async () => {
     useChatStore.getState().setDraftText("hello");
     await useChatStore.getState().sendDraft();
-    expect(useChatStore.getState().messages[0]).toMatchObject({ kind: "system", status: "failed" });
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      kind: "text",
+      status: "queued",
+      error: { code: "pending_connection" }
+    });
+    expect(useChatStore.getState().draftText).toBe("");
+  });
+
+  test("keeps offline queued messages pending when connection changes", async () => {
+    useChatStore.getState().setDraftText("hello");
+    await useChatStore.getState().sendDraft();
+    useChatStore.getState().markInterruptedTransfers("lost");
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      status: "queued",
+      error: { code: "pending_connection" }
+    });
+  });
+
+  test("sends a queued offline text after reconnect", async () => {
+    useChatStore.getState().setDraftText("hello");
+    await useChatStore.getState().sendDraft();
+    const messageId = useChatStore.getState().messages[0].id;
+    useChatStore.getState().setConnectionStatus("connected");
+    const transport = vi.fn();
+    await useChatStore.getState().retryMessage(messageId, transport);
+    expect(transport).toHaveBeenCalledWith(expect.objectContaining({ id: messageId, status: "sending" }));
+    expect(useChatStore.getState().messages[0]).toMatchObject({ status: "sent", error: undefined });
+  });
+
+  test("queues file attachments while disconnected", async () => {
+    useChatStore.setState({ attachments: [attachment({ id: "file_1", localPath: "/tmp/doc.pdf" })] });
+    await useChatStore.getState().sendDraft();
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      kind: "file",
+      status: "queued",
+      error: { code: "pending_connection" },
+      asset: { localPath: "/tmp/doc.pdf" }
+    });
   });
 
   test("optimistically sends text when connected", async () => {

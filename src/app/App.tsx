@@ -10,7 +10,7 @@ import { WindowShell } from "../components/WindowShell";
 import { HistoryTab } from "../components/HistoryTab";
 import { DEFAULT_CONVERSATION_ID, useChatStore } from "../features/chat/chatStore";
 import { runtimeConfig } from "../features/config/runtimeConfig";
-import type { ChatMessage, ConnectionStatus, DraftAttachment } from "../features/chat/messageTypes";
+import type { ChatMessage, ConnectionStatus, ConversationSummary, DraftAttachment } from "../features/chat/messageTypes";
 import { platformAdapter, type DurableTransferSession } from "../features/native/platformAdapter";
 import { realtimeClient } from "../features/realtime/realtimeClient";
 import type { RealtimeAssetMeta, RealtimeBinarySource } from "../features/realtime/realtimeTypes";
@@ -136,6 +136,7 @@ export function App() {
   const recoveryLoadedRef = useRef(false);
   const recoverySessionsRef = useRef<DurableTransferSession[]>([]);
   const incomingRequestsRef = useRef(new Set<string>());
+  const pendingDeliveryIdsRef = useRef(new Set<string>());
   const typingStopTimerRef = useRef<number>();
   const settingsRef = useRef(settings);
   const windowFocusedRef = useRef(typeof document === "undefined" ? true : document.hasFocus());
@@ -246,6 +247,7 @@ export function App() {
           setDiagnostic(undefined);
           setView("main");
           void resumeRecoveredTransfers();
+          void flushPendingConnectionMessages();
         } else if (status === "reconnecting") {
           markInterruptedTransfers();
           setDiagnostic({
@@ -487,10 +489,6 @@ export function App() {
         });
       }),
       listen<{ paths: string[] }>("tauri://drag-drop", async (event) => {
-        if (useChatStore.getState().connectionStatus !== "connected") {
-          setView("pairing");
-          return;
-        }
         const paths = event.payload.paths;
         if (!paths || paths.length === 0) {
           return;
@@ -528,7 +526,7 @@ export function App() {
         }
       }),
       listen("tauri://drag-over", () => {
-        setDraggingOver(useChatStore.getState().connectionStatus === "connected");
+        setDraggingOver(true);
       }),
       listen("tauri://drag-leave", () => {
         setDraggingOver(false);
@@ -544,11 +542,6 @@ export function App() {
   }, []);
 
   async function handlePickFiles() {
-    if (useChatStore.getState().connectionStatus !== "connected") {
-      setView("pairing");
-      return;
-    }
-
     const pickedFiles = await platformAdapter.pickFiles();
     addAttachments(
       pickedFiles.map((file) => ({
@@ -574,11 +567,6 @@ export function App() {
     event.preventDefault();
     setDraggingOver(false);
 
-    if (useChatStore.getState().connectionStatus !== "connected") {
-      setView("pairing");
-      return;
-    }
-
     const droppedFiles = Array.from(event.dataTransfer.files);
     if (droppedFiles.length === 0) {
       return;
@@ -589,7 +577,7 @@ export function App() {
 
   function handleDragOver(event: DragEvent<HTMLElement>) {
     event.preventDefault();
-    setDraggingOver(useChatStore.getState().connectionStatus === "connected");
+    setDraggingOver(true);
   }
 
   function handleDragLeave(event: DragEvent<HTMLElement>) {
@@ -600,10 +588,6 @@ export function App() {
   }
 
   function handlePaste(event: ClipboardEvent<HTMLElement>) {
-    if (useChatStore.getState().connectionStatus !== "connected") {
-      return;
-    }
-
     const pastedAttachments = parseClipboardItems(event.clipboardData.items);
     if (pastedAttachments.length > 0) {
       event.preventDefault();
@@ -845,6 +829,81 @@ export function App() {
     }).catch(() => undefined);
   }
 
+  function handleSelectConversation(conversationId: string) {
+    const previousConversationId = useChatStore.getState().activeConversationId;
+    const wasConnected = useChatStore.getState().connectionStatus === "connected";
+    selectConversation(conversationId);
+
+    const conversation = useChatStore.getState().conversations.find((candidate) => candidate.id === conversationId);
+    if (!conversation || conversationId === previousConversationId) {
+      return;
+    }
+
+    if (wasConnected) {
+      realtimeClient.disconnect();
+      setConnectionStatus("pairing");
+    }
+
+    if (conversation.peerHint) {
+      void reconnectConversation(conversation);
+    }
+  }
+
+  async function reconnectConversation(conversation: ConversationSummary) {
+    const sessionPeerId = sessionPeerIdRef.current;
+    if (!sessionPeerId || !conversation.peerHint) {
+      return;
+    }
+
+    const roomId = createPairingCode();
+    const signalingUrl = signalingUrlForPeer(conversation.peerHint) ?? runtimeConfig.signalingUrl;
+    const reconnectPayload: AutoConnectPayload = {
+      signalingUrl,
+      roomId,
+      mode: "join",
+      peerHint: conversation.peerHint,
+      source: conversation.source === "tailscale" ? "tailscale" : "lan",
+      deviceName: conversation.displayName,
+      platform: conversation.platform
+    };
+
+    setLastAutoConnect(reconnectPayload);
+    setConnectionStatus("connecting");
+    setDiagnostic({
+      tone: "info",
+      title: "接続中",
+      detail: `${conversation.displayName} に接続しています。未送信のメッセージは接続後に自動送信されます。`
+    });
+
+    try {
+      await sendConnectionRequest(signalingUrl, {
+        requestId: crypto.randomUUID(),
+        roomId,
+        requesterName: settings.displayName || "You",
+        requesterPeerId: settings.localPeerId
+      });
+      await realtimeClient.connect({
+        roomId,
+        localPeerId: sessionPeerId,
+        displayName: settings.displayName || "You",
+        mode: "join",
+        signalingUrl,
+        nativeEndpoint: nativeEndpointForPeer(conversation.peerHint),
+        trustedPeer: settings.trustedPeer
+      });
+    } catch (error) {
+      setConnectionStatus("failed");
+      setDiagnostic({
+        tone: "warning",
+        title: "未接続",
+        detail:
+          error instanceof Error
+            ? error.message
+            : "相手がオンラインになったら再接続して、未送信のメッセージを送信します。"
+      });
+    }
+  }
+
   function autoAcceptConnectionRequest(request: ConnectionRequestPayload) {
     const sessionPeerId = sessionPeerIdRef.current;
     const currentSettings = useChatStore.getState().settings;
@@ -901,7 +960,7 @@ export function App() {
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
   const activeMessages = messages.filter((message) => (message.conversationId ?? DEFAULT_CONVERSATION_ID) === activeConversationId);
   const peerName = activeConversation?.displayName ?? settings.peerDisplayName ?? (connectionStatus === "connected" ? "Peer" : "未接続");
-  const composerDisabled = connectionStatus !== "connected";
+  const composerDisabled = false;
 
   function handleDraftChange(value: string) {
     setDraftText(value);
@@ -942,6 +1001,31 @@ export function App() {
     await retryMessage(messageId, async (message) => {
       await sendRealtimeMessage(message);
     });
+  }
+
+  async function flushPendingConnectionMessages() {
+    const state = useChatStore.getState();
+    const pendingMessages = state.messages.filter(
+      (message) =>
+        message.sender === "me" &&
+        message.status === "queued" &&
+        message.error?.code === "pending_connection" &&
+        (message.conversationId ?? DEFAULT_CONVERSATION_ID) === state.activeConversationId
+    );
+
+    for (const message of pendingMessages) {
+      if (pendingDeliveryIdsRef.current.has(message.id)) {
+        continue;
+      }
+      pendingDeliveryIdsRef.current.add(message.id);
+      try {
+        await retryMessage(message.id, async (retryingMessage) => {
+          await sendRealtimeMessage(retryingMessage);
+        });
+      } finally {
+        pendingDeliveryIdsRef.current.delete(message.id);
+      }
+    }
   }
 
   function handleCancelMessage(messageId: string) {
@@ -1028,7 +1112,7 @@ export function App() {
             onHistory={() => setView("history")}
             onMini={() => setView("mini")}
             onPair={() => setView("pairing")}
-            onSelectConversation={selectConversation}
+            onSelectConversation={handleSelectConversation}
           />
           <ConnectionRequestBanner
             request={connectionRequest}

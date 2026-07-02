@@ -4,6 +4,8 @@ import { realtimeClient } from "../realtime/realtimeClient";
 import type {
   AppView,
   ChatMessage,
+  ConversationDraft,
+  ConversationSummary,
   ConnectionStatus,
   DraftAttachment,
   KunoSettings,
@@ -16,6 +18,9 @@ type ChatStore = {
   storageVersion: number;
   currentView: AppView;
   connectionStatus: ConnectionStatus;
+  activeConversationId: string;
+  conversations: ConversationSummary[];
+  conversationDrafts: Record<string, ConversationDraft>;
   messages: ChatMessage[];
   draftText: string;
   attachments: DraftAttachment[];
@@ -27,6 +32,15 @@ type ChatStore = {
   settings: KunoSettings;
   setView: (view: AppView) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
+  selectConversation: (conversationId: string) => void;
+  activateConversation: (input: {
+    peerId?: string;
+    displayName?: string;
+    peerHint?: string;
+    source?: ConversationSummary["source"];
+    platform?: string;
+    fingerprint?: string;
+  }) => string;
   incrementUnread: () => void;
   clearUnread: () => void;
   setPeerTyping: (isTyping: boolean, at?: number) => void;
@@ -68,6 +82,8 @@ type ChatStore = {
   clearHistoryList: () => Promise<void>;
 };
 
+export const DEFAULT_CONVERSATION_ID = "conversation_default";
+
 const defaultSettings: KunoSettings = {
   localPeerId: createLocalPeerId(),
   displayName: "Atsushi",
@@ -80,7 +96,7 @@ const defaultSettings: KunoSettings = {
   theme: "light"
 };
 
-const currentStorageVersion = 2;
+const currentStorageVersion = 3;
 
 export const useChatStore = create<ChatStore>()(
   persist(
@@ -88,6 +104,11 @@ export const useChatStore = create<ChatStore>()(
       storageVersion: currentStorageVersion,
       currentView: "main",
       connectionStatus: "pairing",
+      activeConversationId: DEFAULT_CONVERSATION_ID,
+      conversations: [createDefaultConversation()],
+      conversationDrafts: {
+        [DEFAULT_CONVERSATION_ID]: { draftText: "", attachments: [] }
+      },
       messages: [],
       draftText: "",
       attachments: [],
@@ -99,9 +120,85 @@ export const useChatStore = create<ChatStore>()(
       settings: defaultSettings,
       history: [],
       setView: (currentView) => set({ currentView }),
-      setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
+      setConnectionStatus: (connectionStatus) =>
+        set((state) => ({
+          connectionStatus,
+          conversations: state.conversations.map((conversation) =>
+            conversation.id === state.activeConversationId ? { ...conversation, connectionStatus } : conversation
+          )
+        })),
+      selectConversation: (conversationId) =>
+        set((state) => {
+          const nextDrafts = {
+            ...state.conversationDrafts,
+            [state.activeConversationId]: {
+              draftText: state.draftText,
+              attachments: state.attachments
+            }
+          };
+          const nextConversation =
+            state.conversations.find((conversation) => conversation.id === conversationId) ??
+            ({
+              ...createDefaultConversation(),
+              id: conversationId
+            } satisfies ConversationSummary);
+          const nextConversations = upsertConversation(state.conversations, {
+            ...nextConversation,
+            unreadCount: 0
+          });
+          const nextDraft = nextDrafts[conversationId] ?? { draftText: "", attachments: [] };
+          return {
+            activeConversationId: conversationId,
+            conversations: nextConversations,
+            conversationDrafts: nextDrafts,
+            draftText: nextDraft.draftText,
+            attachments: nextDraft.attachments,
+            unreadCount: totalUnread(nextConversations)
+          };
+        }),
+      activateConversation: (input) => {
+        const conversationId = conversationIdForPeer(input.peerId ?? input.peerHint ?? input.fingerprint);
+        set((state) => {
+          const existing = state.conversations.find((conversation) => conversation.id === conversationId);
+          const nextConversations = upsertConversation(state.conversations, {
+            id: conversationId,
+            displayName: input.displayName || existing?.displayName || input.peerHint || "Peer",
+            peerId: input.peerId ?? existing?.peerId,
+            peerHint: input.peerHint ?? existing?.peerHint,
+            source: input.source ?? existing?.source ?? "unknown",
+            platform: input.platform ?? existing?.platform,
+            fingerprint: input.fingerprint ?? existing?.fingerprint,
+            unreadCount: existing?.unreadCount ?? 0,
+            lastMessageAt: existing?.lastMessageAt,
+            lastMessagePreview: existing?.lastMessagePreview,
+            connectionStatus: state.connectionStatus
+          });
+          return {
+            activeConversationId: conversationId,
+            conversations: nextConversations,
+            conversationDrafts: {
+              ...state.conversationDrafts,
+              [state.activeConversationId]: {
+                draftText: state.draftText,
+                attachments: state.attachments
+              },
+              [conversationId]: state.conversationDrafts[conversationId] ?? { draftText: "", attachments: [] }
+            },
+            draftText: state.conversationDrafts[conversationId]?.draftText ?? "",
+            attachments: state.conversationDrafts[conversationId]?.attachments ?? [],
+            unreadCount: totalUnread(nextConversations)
+          };
+        });
+        return conversationId;
+      },
       incrementUnread: () => set((state) => ({ unreadCount: Math.min(state.unreadCount + 1, 99) })),
-      clearUnread: () => set({ unreadCount: 0 }),
+      clearUnread: () =>
+        set((state) => {
+          const nextConversations = state.conversations.map((conversation) =>
+            conversation.id === state.activeConversationId ? { ...conversation, unreadCount: 0 } : conversation
+          );
+          return { unreadCount: totalUnread(nextConversations), conversations: nextConversations };
+        }),
       setPeerTyping: (peerTyping, at = Date.now()) =>
         set((state) => (at < state.peerTypingAt ? state : { peerTyping, peerTypingAt: at })),
       markMessageStatus: (messageId, status) =>
@@ -207,12 +304,24 @@ export const useChatStore = create<ChatStore>()(
           if (state.messages.some((message) => message.id === input.id)) {
             return state;
           }
+          const conversationId = conversationIdForPeer(input.senderId);
+          const active = state.activeConversationId === conversationId;
+          const unreadIncrement = active && state.currentView !== "mini" ? 0 : 1;
+          const nextConversations = touchConversation(state.conversations, {
+            id: conversationId,
+            displayName: input.senderName,
+            peerId: input.senderId,
+            unreadIncrement,
+            lastMessageAt: input.createdAt,
+            lastMessagePreview: input.text
+          });
 
           return {
             messages: [
               ...state.messages,
               {
                 id: input.id,
+                conversationId,
                 kind: "text",
                 sender: "peer",
                 senderId: input.senderId,
@@ -226,6 +335,8 @@ export const useChatStore = create<ChatStore>()(
                 }
               }
             ],
+            conversations: nextConversations,
+            unreadCount: totalUnread(nextConversations),
             settings: {
               ...state.settings,
               peerDisplayName: input.senderName
@@ -242,6 +353,17 @@ export const useChatStore = create<ChatStore>()(
             peerName: input.senderName,
             status: "queued",
             isFolder: input.isFolder
+          });
+          const conversationId = conversationIdForPeer(input.senderId);
+          const active = state.activeConversationId === conversationId;
+          const unreadIncrement = active && state.currentView !== "mini" ? 0 : 1;
+          const nextConversations = touchConversation(state.conversations, {
+            id: conversationId,
+            displayName: input.senderName,
+            peerId: input.senderId,
+            unreadIncrement,
+            lastMessageAt: input.createdAt,
+            lastMessagePreview: input.name
           });
           const existingMessage = state.messages.find((message) => message.id === input.id);
           if (
@@ -260,6 +382,7 @@ export const useChatStore = create<ChatStore>()(
                 message.id === input.id
                   ? {
                       ...message,
+                      conversationId: message.conversationId ?? conversationId,
                       status: "queued",
                       progress: 0,
                       error: undefined,
@@ -278,6 +401,8 @@ export const useChatStore = create<ChatStore>()(
                     }
                   : message
               ),
+              conversations: nextConversations,
+              unreadCount: totalUnread(nextConversations),
               transferStates: {
                 ...state.transferStates,
                 [input.transferId]: {
@@ -301,6 +426,7 @@ export const useChatStore = create<ChatStore>()(
               ...state.messages,
               {
                 id: input.id,
+                conversationId,
                 kind: input.kind,
                 sender: "peer",
                 senderId: input.senderId,
@@ -322,6 +448,8 @@ export const useChatStore = create<ChatStore>()(
                 }
               }
             ],
+            conversations: nextConversations,
+            unreadCount: totalUnread(nextConversations),
             transferStates: {
               ...state.transferStates,
               [input.transferId]: {
@@ -582,19 +710,59 @@ export const useChatStore = create<ChatStore>()(
             }
           };
         }),
-      setDraftText: (draftText) => set({ draftText }),
+      setDraftText: (draftText) =>
+        set((state) => ({
+          draftText,
+          conversationDrafts: {
+            ...state.conversationDrafts,
+            [state.activeConversationId]: {
+              draftText,
+              attachments: state.attachments
+            }
+          }
+        })),
       addAttachments: (attachments) =>
-        set((state) => ({
-          attachments: [...state.attachments, ...attachments]
-        })),
+        set((state) => {
+          const nextAttachments = [...state.attachments, ...attachments];
+          return {
+            attachments: nextAttachments,
+            conversationDrafts: {
+              ...state.conversationDrafts,
+              [state.activeConversationId]: {
+                draftText: state.draftText,
+                attachments: nextAttachments
+              }
+            }
+          };
+        }),
       removeAttachment: (id) =>
+        set((state) => {
+          const nextAttachments = state.attachments.filter((attachment) => attachment.id !== id);
+          return {
+            attachments: nextAttachments,
+            conversationDrafts: {
+              ...state.conversationDrafts,
+              [state.activeConversationId]: {
+                draftText: state.draftText,
+                attachments: nextAttachments
+              }
+            }
+          };
+        }),
+      clearAttachments: () =>
         set((state) => ({
-          attachments: state.attachments.filter((attachment) => attachment.id !== id)
+          attachments: [],
+          conversationDrafts: {
+            ...state.conversationDrafts,
+            [state.activeConversationId]: {
+              draftText: state.draftText,
+              attachments: []
+            }
+          }
         })),
-      clearAttachments: () => set({ attachments: [] }),
       setDraggingOver: (isDraggingOver) => set({ isDraggingOver }),
       sendDraft: async (transport) => {
-        const { connectionStatus, draftText, attachments, settings } = get();
+        const { activeConversationId, connectionStatus, draftText, attachments, settings } = get();
         const trimmed = draftText.trim();
 
         if (!trimmed && attachments.length === 0) {
@@ -605,6 +773,7 @@ export const useChatStore = create<ChatStore>()(
         if (connectionStatus !== "connected") {
           const warningMessage: ChatMessage = {
             id: `sys_${now}`,
+            conversationId: activeConversationId,
             kind: "system",
             sender: "system",
             senderId: "system",
@@ -631,8 +800,9 @@ export const useChatStore = create<ChatStore>()(
         const optimisticStatus = "sending";
         const baseMessage = {
           id: `msg_${now}`,
+          conversationId: activeConversationId,
           sender: "me" as const,
-          senderId: "me",
+          senderId: settings.localPeerId,
           senderName: settings.displayName || "You",
           createdAt: now,
           status: optimisticStatus as ChatMessage["status"]
@@ -712,11 +882,28 @@ export const useChatStore = create<ChatStore>()(
           }
         }
 
-        set((state) => ({
-          messages: [...state.messages, message],
-          draftText: "",
-          attachments: []
-        }));
+        set((state) => {
+          const nextConversations = touchConversation(state.conversations, {
+            id: activeConversationId,
+            displayName: state.conversations.find((conversation) => conversation.id === activeConversationId)?.displayName || settings.peerDisplayName || "Peer",
+            lastMessageAt: message.createdAt,
+            lastMessagePreview: messagePreview(message),
+            unreadIncrement: 0
+          });
+          return {
+            messages: [...state.messages, message],
+            conversations: nextConversations,
+            draftText: "",
+            attachments: [],
+            conversationDrafts: {
+              ...state.conversationDrafts,
+              [activeConversationId]: {
+                draftText: "",
+                attachments: []
+              }
+            }
+          };
+        });
 
         if (!transport) {
           get().failMessage(message.id, "送信経路が準備できていません。", "transport_missing");
@@ -767,6 +954,9 @@ export const useChatStore = create<ChatStore>()(
       partialize: (state) => ({
         messages: serializeMessagesForStorage(state.messages),
         storageVersion: state.storageVersion,
+        activeConversationId: state.activeConversationId,
+        conversations: state.conversations,
+        conversationDrafts: serializeConversationDrafts(state.conversationDrafts),
         connectionStatus: state.connectionStatus,
         unreadCount: state.unreadCount,
         settings: state.settings,
@@ -774,27 +964,43 @@ export const useChatStore = create<ChatStore>()(
       }),
       merge: (persisted, current) => {
         const persistedState = persisted as Partial<ChatStore> | undefined;
+        const settings = {
+          ...defaultSettings,
+          ...persistedState?.settings,
+          localPeerId: persistedState?.settings?.localPeerId ?? defaultSettings.localPeerId
+        };
+        const migratedMessages = sanitizePersistedMessages(persistedState?.messages, current.messages).map((message) => ({
+          ...message,
+          conversationId: message.conversationId ?? DEFAULT_CONVERSATION_ID
+        }));
+        const conversations =
+          persistedState?.storageVersion === currentStorageVersion
+            ? sanitizePersistedConversations(persistedState?.conversations, settings.peerDisplayName)
+            : [createDefaultConversation(settings.peerDisplayName || "Peer", migratedMessages)];
+        const activeConversationId =
+          conversations.some((conversation) => conversation.id === persistedState?.activeConversationId)
+            ? persistedState?.activeConversationId ?? DEFAULT_CONVERSATION_ID
+            : conversations[0]?.id ?? DEFAULT_CONVERSATION_ID;
+        const conversationDrafts = sanitizePersistedConversationDrafts(persistedState?.conversationDrafts, activeConversationId);
+        const activeDraft = conversationDrafts[activeConversationId] ?? { draftText: "", attachments: [] };
         return {
           ...current,
           ...persistedState,
           storageVersion: currentStorageVersion,
           currentView: "main",
           connectionStatus: persistedState?.connectionStatus === "connected" ? "reconnecting" : "pairing",
-          unreadCount: Math.min(Math.max(persistedState?.unreadCount ?? 0, 0), 99),
-          attachments: [],
+          activeConversationId,
+          conversations,
+          conversationDrafts,
+          unreadCount: totalUnread(conversations),
+          draftText: activeDraft.draftText,
+          attachments: activeDraft.attachments,
           transferStates: sanitizePersistedTransferStates(persistedState?.transferStates),
           isDraggingOver: false,
           peerTyping: false,
           peerTypingAt: 0,
-          settings: {
-            ...defaultSettings,
-            ...persistedState?.settings,
-            localPeerId: persistedState?.settings?.localPeerId ?? defaultSettings.localPeerId
-          },
-          messages:
-            persistedState?.storageVersion === currentStorageVersion
-              ? sanitizePersistedMessages(persistedState?.messages, current.messages)
-              : []
+          settings,
+          messages: migratedMessages
         };
       }
     }
@@ -830,6 +1036,76 @@ function serializeMessagesForStorage(messages: ChatMessage[]): ChatMessage[] {
         }
       : undefined
   }));
+}
+
+function serializeConversationDrafts(drafts: Record<string, ConversationDraft>): Record<string, ConversationDraft> {
+  return Object.fromEntries(
+    Object.entries(drafts).map(([conversationId, draft]) => [
+      conversationId,
+      {
+        draftText: draft.draftText,
+        attachments: draft.attachments.map(withoutFile)
+      }
+    ])
+  );
+}
+
+function sanitizePersistedConversations(value: unknown, fallbackName = "Peer"): ConversationSummary[] {
+  if (!Array.isArray(value)) {
+    return [createDefaultConversation(fallbackName)];
+  }
+  const conversations = value.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") {
+      return [];
+    }
+    const conversation = candidate as Partial<ConversationSummary>;
+    if (!conversation.id || typeof conversation.id !== "string") {
+      return [];
+    }
+    return [
+      {
+        id: conversation.id,
+        displayName: conversation.displayName || fallbackName || "Peer",
+        peerId: conversation.peerId,
+        peerHint: conversation.peerHint,
+        source: conversation.source,
+        platform: conversation.platform,
+        fingerprint: conversation.fingerprint,
+        unreadCount: Math.max(0, Math.min(99, Math.trunc(conversation.unreadCount ?? 0))),
+        lastMessageAt: conversation.lastMessageAt,
+        lastMessagePreview: conversation.lastMessagePreview,
+        connectionStatus: conversation.connectionStatus
+      } satisfies ConversationSummary
+    ];
+  });
+  return conversations.length > 0 ? conversations : [createDefaultConversation(fallbackName)];
+}
+
+function sanitizePersistedConversationDrafts(value: unknown, activeConversationId: string): Record<string, ConversationDraft> {
+  if (!value || typeof value !== "object") {
+    return { [activeConversationId]: { draftText: "", attachments: [] } };
+  }
+  const drafts = Object.fromEntries(
+    Object.entries(value).flatMap(([conversationId, draft]) => {
+      if (!draft || typeof draft !== "object") {
+        return [];
+      }
+      const candidate = draft as Partial<ConversationDraft>;
+      return [
+        [
+          conversationId,
+          {
+            draftText: typeof candidate.draftText === "string" ? candidate.draftText : "",
+            attachments: Array.isArray(candidate.attachments) ? candidate.attachments.map(withoutFile) : []
+          } satisfies ConversationDraft
+        ]
+      ];
+    })
+  );
+  return {
+    [activeConversationId]: { draftText: "", attachments: [] },
+    ...drafts
+  };
 }
 
 function withoutFile<T extends { file?: File }>(asset: T): T {
@@ -996,6 +1272,86 @@ function transferStatesForRetry(message: ChatMessage): Record<string, TransferSt
     }
   }
   return states;
+}
+
+function createDefaultConversation(displayName = "Peer", messages: ChatMessage[] = []): ConversationSummary {
+  const lastMessage = messages[messages.length - 1];
+  return {
+    id: DEFAULT_CONVERSATION_ID,
+    displayName,
+    source: "unknown",
+    unreadCount: 0,
+    lastMessageAt: lastMessage?.createdAt,
+    lastMessagePreview: lastMessage ? messagePreview(lastMessage) : undefined,
+    connectionStatus: "pairing"
+  };
+}
+
+function conversationIdForPeer(value: string | undefined): string {
+  if (!value) {
+    return DEFAULT_CONVERSATION_ID;
+  }
+  return `peer_${value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 96)}`;
+}
+
+function upsertConversation(conversations: ConversationSummary[], next: ConversationSummary): ConversationSummary[] {
+  const found = conversations.some((conversation) => conversation.id === next.id);
+  if (!found) {
+    return [...conversations, next].sort(sortConversations);
+  }
+  return conversations.map((conversation) => (conversation.id === next.id ? { ...conversation, ...next } : conversation)).sort(sortConversations);
+}
+
+function touchConversation(
+  conversations: ConversationSummary[],
+  input: {
+    id: string;
+    displayName: string;
+    peerId?: string;
+    peerHint?: string;
+    source?: ConversationSummary["source"];
+    platform?: string;
+    fingerprint?: string;
+    unreadIncrement: number;
+    lastMessageAt?: number;
+    lastMessagePreview?: string;
+  }
+): ConversationSummary[] {
+  const existing = conversations.find((conversation) => conversation.id === input.id);
+  return upsertConversation(conversations, {
+    id: input.id,
+    displayName: input.displayName || existing?.displayName || "Peer",
+    peerId: input.peerId ?? existing?.peerId,
+    peerHint: input.peerHint ?? existing?.peerHint,
+    source: input.source ?? existing?.source ?? "unknown",
+    platform: input.platform ?? existing?.platform,
+    fingerprint: input.fingerprint ?? existing?.fingerprint,
+    unreadCount: Math.min(99, Math.max(0, (existing?.unreadCount ?? 0) + input.unreadIncrement)),
+    lastMessageAt: input.lastMessageAt ?? existing?.lastMessageAt,
+    lastMessagePreview: input.lastMessagePreview ?? existing?.lastMessagePreview,
+    connectionStatus: existing?.connectionStatus
+  });
+}
+
+function totalUnread(conversations: ConversationSummary[]): number {
+  return Math.min(99, conversations.reduce((total, conversation) => total + conversation.unreadCount, 0));
+}
+
+function sortConversations(left: ConversationSummary, right: ConversationSummary): number {
+  return (right.lastMessageAt ?? 0) - (left.lastMessageAt ?? 0) || left.displayName.localeCompare(right.displayName);
+}
+
+function messagePreview(message: ChatMessage): string {
+  if (message.text?.text) {
+    return message.text.text;
+  }
+  if (message.asset) {
+    return message.asset.name;
+  }
+  if (message.bundle) {
+    return message.bundle.caption || `${message.bundle.count} files`;
+  }
+  return "KunoChat";
 }
 
 function createLocalPeerId(): string {

@@ -79,6 +79,7 @@ export type TransferError = {
 
 export type ChatMessage = {
   id: string;
+  conversationId?: string;
   kind: MessageKind;
   sender: Sender;
   senderId: string;
@@ -92,6 +93,25 @@ export type ChatMessage = {
   asset?: AssetContent;
   bundle?: BundleContent;
   error?: TransferError;
+};
+
+export type ConversationSummary = {
+  id: string;
+  displayName: string;
+  peerId?: string;
+  peerHint?: string;
+  source?: "lan" | "tailscale" | "manual" | "unknown";
+  platform?: string;
+  fingerprint?: string;
+  unreadCount: number;
+  lastMessageAt?: number;
+  lastMessagePreview?: string;
+  connectionStatus?: ConnectionStatus;
+};
+
+export type ConversationDraft = {
+  draftText: string;
+  attachments: DraftAttachment[];
 };
 
 export type DraftAttachment = {

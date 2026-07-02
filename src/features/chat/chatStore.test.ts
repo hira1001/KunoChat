@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { useChatStore } from "./chatStore";
+import { DEFAULT_CONVERSATION_ID, useChatStore } from "./chatStore";
 import type { DraftAttachment } from "./messageTypes";
 
 function attachment(overrides: Partial<DraftAttachment> = {}): DraftAttachment {
@@ -19,6 +19,19 @@ function resetStore() {
   useChatStore.setState({
     currentView: "main",
     connectionStatus: "pairing",
+    activeConversationId: DEFAULT_CONVERSATION_ID,
+    conversations: [
+      {
+        id: DEFAULT_CONVERSATION_ID,
+        displayName: "Peer",
+        source: "unknown",
+        unreadCount: 0,
+        connectionStatus: "pairing"
+      }
+    ],
+    conversationDrafts: {
+      [DEFAULT_CONVERSATION_ID]: { draftText: "", attachments: [] }
+    },
     messages: [],
     draftText: "",
     attachments: [],
@@ -82,6 +95,15 @@ describe("chatStore", () => {
   test("updates draft text", () => {
     useChatStore.getState().setDraftText("hello");
     expect(useChatStore.getState().draftText).toBe("hello");
+  });
+
+  test("keeps drafts per conversation", () => {
+    const peerConversationId = useChatStore.getState().activateConversation({ peerId: "peer_a", displayName: "Peer A" });
+    useChatStore.getState().setDraftText("hello a");
+    useChatStore.getState().selectConversation(DEFAULT_CONVERSATION_ID);
+    useChatStore.getState().setDraftText("hello default");
+    useChatStore.getState().selectConversation(peerConversationId);
+    expect(useChatStore.getState().draftText).toBe("hello a");
   });
 
   test("adds attachments", () => {
@@ -173,6 +195,20 @@ describe("chatStore", () => {
     useChatStore.getState().receivePeerText(input);
     useChatStore.getState().receivePeerText(input);
     expect(useChatStore.getState().messages).toHaveLength(1);
+  });
+
+  test("routes peer messages into separate conversations", () => {
+    useChatStore.getState().receivePeerText({ id: "peer_a_msg", senderId: "peer_a", senderName: "Peer A", createdAt: 1, text: "hello a" });
+    useChatStore.getState().receivePeerText({ id: "peer_b_msg", senderId: "peer_b", senderName: "Peer B", createdAt: 2, text: "hello b" });
+
+    const messages = useChatStore.getState().messages;
+    const peerAConversation = useChatStore.getState().conversations.find((conversation) => conversation.displayName === "Peer A");
+    const peerBConversation = useChatStore.getState().conversations.find((conversation) => conversation.displayName === "Peer B");
+
+    expect(peerAConversation?.id).toBeTruthy();
+    expect(peerBConversation?.id).toBeTruthy();
+    expect(messages.find((message) => message.id === "peer_a_msg")?.conversationId).toBe(peerAConversation?.id);
+    expect(messages.find((message) => message.id === "peer_b_msg")?.conversationId).toBe(peerBConversation?.id);
   });
 
   test("stores peer display name from received text", () => {

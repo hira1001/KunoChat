@@ -8,7 +8,7 @@ import { PairingScreen } from "../components/PairingScreen";
 import { SettingsScreen } from "../components/SettingsScreen";
 import { WindowShell } from "../components/WindowShell";
 import { HistoryTab } from "../components/HistoryTab";
-import { useChatStore } from "../features/chat/chatStore";
+import { DEFAULT_CONVERSATION_ID, useChatStore } from "../features/chat/chatStore";
 import { runtimeConfig } from "../features/config/runtimeConfig";
 import type { ChatMessage, ConnectionStatus, DraftAttachment } from "../features/chat/messageTypes";
 import { platformAdapter, type DurableTransferSession } from "../features/native/platformAdapter";
@@ -95,6 +95,8 @@ export function App() {
   const {
     currentView,
     connectionStatus,
+    activeConversationId,
+    conversations,
     messages,
     draftText,
     attachments,
@@ -104,7 +106,8 @@ export function App() {
     settings,
     setView,
     setConnectionStatus,
-    incrementUnread,
+    selectConversation,
+    activateConversation,
     clearUnread,
     setPeerTyping,
     markMessageStatus,
@@ -445,11 +448,11 @@ export function App() {
         setDetectedPeers((peers) => upsertDetectedPeer(peers, event.payload));
       }),
       listen<ConnectionRequestPayload>("kuno:connection-request", (event) => {
-        setConnectionRequest(event.payload);
+        autoAcceptConnectionRequest(event.payload);
         setDiagnostic({
           tone: "info",
-          title: "接続依頼が届きました",
-          detail: `${event.payload.requesterName || "相手"} が接続を求めています。`
+          title: "接続しました",
+          detail: `${event.payload.requesterName || "相手"} からの接続を自動承認しました。`
         });
         setView("main");
       }),
@@ -641,19 +644,18 @@ export function App() {
     }
   }
 
-  async function markUnreadIfAttentionIsNeeded(): Promise<boolean> {
+  async function attentionIsNeeded(): Promise<boolean> {
     const epoch = unreadEpochRef.current;
     const miniMode = useChatStore.getState().currentView === "mini";
     const needsAttention = miniMode || await platformAdapter.needsUnreadAttention();
     if (!needsAttention || epoch !== unreadEpochRef.current) {
       return false;
     }
-    incrementUnread();
     return true;
   }
 
   async function notifyIncoming(title: string, body: string) {
-    if (!await markUnreadIfAttentionIsNeeded() || !settingsRef.current.notifications) {
+    if (!await attentionIsNeeded() || !settingsRef.current.notifications) {
       return;
     }
     await platformAdapter.showNotification({ title, body }).catch(() => undefined);
@@ -732,6 +734,13 @@ export function App() {
     const selectedPeer = lastAutoConnect;
     const detectedPeerUrl = selectedPeer?.peerHint ? signalingUrlForPeer(selectedPeer.peerHint) : undefined;
     if (selectedPeer) {
+      activateConversation({
+        peerId: selectedPeer.peerHint,
+        displayName: selectedPeer.deviceName || selectedPeer.peerHint,
+        peerHint: selectedPeer.peerHint,
+        source: selectedPeer.source,
+        platform: selectedPeer.platform
+      });
       setLastAutoConnect({
         ...selectedPeer,
         roomId: normalizedCode,
@@ -770,6 +779,13 @@ export function App() {
       realtimeClient.disconnect();
     }
 
+    activateConversation({
+      peerId: peer.peerHint,
+      displayName: peer.deviceName || peer.peerHint,
+      peerHint: peer.peerHint,
+      source: peer.source,
+      platform: peer.platform
+    });
     setLastAutoConnect(peer);
     setDiagnostic({
       tone: "info",
@@ -783,7 +799,7 @@ export function App() {
         requestId,
         roomId,
         requesterName: settings.displayName || "You",
-        requesterPeerId: sessionPeerId
+        requesterPeerId: settings.localPeerId
       });
       setLastAutoConnect(requestPeer);
       setDiagnostic({
@@ -829,10 +845,10 @@ export function App() {
     }).catch(() => undefined);
   }
 
-  function handleAcceptConnectionRequest() {
-    const request = connectionRequest;
+  function autoAcceptConnectionRequest(request: ConnectionRequestPayload) {
     const sessionPeerId = sessionPeerIdRef.current;
-    if (!request || !sessionPeerId) {
+    const currentSettings = useChatStore.getState().settings;
+    if (!sessionPeerId || request.requesterPeerId === currentSettings.localPeerId) {
       return;
     }
 
@@ -840,6 +856,12 @@ export function App() {
       realtimeClient.disconnect();
     }
 
+    activateConversation({
+      peerId: request.requesterPeerId,
+      displayName: request.requesterName || "Peer",
+      peerHint: request.peerHint,
+      source: "lan"
+    });
     setConnectionRequest(undefined);
     setLastAutoConnect({
       signalingUrl: runtimeConfig.signalingUrl,
@@ -851,7 +873,7 @@ export function App() {
     });
     setDiagnostic({
       tone: "info",
-      title: "接続を承認しました",
+      title: "接続しました",
       detail: `${request.requesterName || "相手"} と接続しています。`
     });
     void realtimeClient.connect({
@@ -865,12 +887,20 @@ export function App() {
     }).catch(() => undefined);
   }
 
+  function handleAcceptConnectionRequest() {
+    if (connectionRequest) {
+      autoAcceptConnectionRequest(connectionRequest);
+    }
+  }
+
   function handleDeclineConnectionRequest() {
     setConnectionRequest(undefined);
     setDiagnostic(undefined);
   }
 
-  const peerName = settings.peerDisplayName ?? (connectionStatus === "connected" ? "Peer" : "未接続");
+  const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
+  const activeMessages = messages.filter((message) => (message.conversationId ?? DEFAULT_CONVERSATION_ID) === activeConversationId);
+  const peerName = activeConversation?.displayName ?? settings.peerDisplayName ?? (connectionStatus === "connected" ? "Peer" : "未接続");
   const composerDisabled = connectionStatus !== "connected";
 
   function handleDraftChange(value: string) {
@@ -992,10 +1022,13 @@ export function App() {
           <Header
             status={connectionStatus}
             peerName={peerName}
+            conversations={conversations}
+            activeConversationId={activeConversationId}
             onSettings={() => setView("settings")}
             onHistory={() => setView("history")}
             onMini={() => setView("mini")}
             onPair={() => setView("pairing")}
+            onSelectConversation={selectConversation}
           />
           <ConnectionRequestBanner
             request={connectionRequest}
@@ -1009,7 +1042,7 @@ export function App() {
             onRetry={handleRetryAutoConnect}
           />
           <MessageList
-            messages={messages}
+            messages={activeMessages}
             connectionStatus={connectionStatus}
             peerName={peerName}
             showTyping={peerTyping}

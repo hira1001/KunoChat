@@ -51,3 +51,12 @@
 - Add retry/resume flows.
 - Refine accessibility and reduced motion.
 - Prepare signed distribution later without adding paid infrastructure.
+
+## Phase 8: Hybrid Delivery
+
+- Remove required Connect actions after the first pairing.
+- Choose between P2P direct, realtime relay, store-and-forward, and local queue automatically.
+- Use relay for text/control when P2P is not ready.
+- Keep large file bodies on P2P/native direct whenever possible.
+- Store only encrypted offline envelopes and encrypted file objects.
+- Add authenticated ACK states for local queued, relay accepted, stored, peer delivered, and read.

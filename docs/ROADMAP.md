@@ -60,3 +60,5 @@
 - Keep large file bodies on P2P/native direct whenever possible.
 - Store only encrypted offline envelopes and encrypted file objects.
 - Add authenticated ACK states for local queued, relay accepted, stored, peer delivered, and read.
+- Maintain the basic design in `docs/V0.6.0_HYBRID_DELIVERY_BASIC_DESIGN.md`.
+- Maintain the detailed design in `docs/V0.6.0_HYBRID_DELIVERY_DETAILED_DESIGN.md`.

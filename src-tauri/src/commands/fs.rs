@@ -547,6 +547,28 @@ pub async fn delete_part_file(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn delete_temporary_zip(path: String) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    let temp_dir = std::env::temp_dir()
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let canonical = path.canonicalize().map_err(|error| error.to_string())?;
+    let filename = canonical
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "temporary zip filename is unavailable".to_string())?;
+
+    if !canonical.starts_with(&temp_dir)
+        || !filename.starts_with("KunoChat_Dir_")
+        || !filename.ends_with(".zip")
+    {
+        return Err("refusing to delete an unmanaged temporary file".to_string());
+    }
+
+    std::fs::remove_file(canonical).map_err(|error| error.to_string())
+}
+
 fn sanitize_filename(filename: &str) -> String {
     let sanitized = filename
         .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")

@@ -71,6 +71,7 @@ pub fn run() {
             fs::get_part_file_size,
             fs::finalize_part_file,
             fs::delete_part_file,
+            fs::delete_temporary_zip,
             identity::get_device_identity,
             identity::sign_device_challenge,
             identity::verify_device_signature,

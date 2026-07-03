@@ -21,6 +21,7 @@ import { platformAdapter } from "../native/platformAdapter";
 const MAX_PERSISTED_MESSAGES = 500;
 const MAX_DRAFT_ATTACHMENTS = 30;
 const MAX_DRAFT_ATTACHMENT_BYTES = 10 * 1024 * 1024 * 1024;
+let sendDraftInFlight = false;
 
 type ChatStore = {
   storageVersion: number;
@@ -827,10 +828,15 @@ export const useChatStore = create<ChatStore>()(
         }),
       setDraggingOver: (isDraggingOver) => set({ isDraggingOver }),
       sendDraft: async (transport) => {
+        if (sendDraftInFlight) {
+          return;
+        }
+        sendDraftInFlight = true;
         const { activeConversationId, connectionStatus, draftText, attachments, settings } = get();
         const trimmed = draftText.trim();
 
         if (!trimmed && attachments.length === 0) {
+          sendDraftInFlight = false;
           return;
         }
 
@@ -946,6 +952,7 @@ export const useChatStore = create<ChatStore>()(
             }
           };
         });
+        sendDraftInFlight = false;
 
         if (pendingConnection) {
           return;
@@ -970,7 +977,18 @@ export const useChatStore = create<ChatStore>()(
         set((state) => ({
           settings: { ...state.settings, ...settings }
         })),
-      clearHistory: () => set({ messages: [], deliveryOutbox: [] }),
+      clearHistory: () =>
+        set((state) => ({
+          messages: [],
+          deliveryOutbox: [],
+          transferStates: {},
+          unreadCount: 0,
+          conversations: state.conversations.map((conversation) => ({
+            ...conversation,
+            lastMessagePreview: "",
+            unreadCount: 0
+          }))
+        })),
       loadHistory: async () => {
         const history = await dbService.getTransfersHistory();
         set({ history });

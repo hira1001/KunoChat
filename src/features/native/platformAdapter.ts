@@ -345,7 +345,7 @@ export const platformAdapter = {
     return new Uint8Array(bytes).buffer;
   },
 
-  async createNativeBinarySource(path: string, size: number): Promise<NativeBinaryFileSource> {
+  async createNativeBinarySource(path: string, size: number, deleteOnClose = false): Promise<NativeBinaryFileSource> {
     if (!hasTauri) {
       throw new Error("Native file reads are only available in Tauri.");
     }
@@ -390,7 +390,13 @@ export const platformAdapter = {
           return;
         }
         closed = true;
-        await handle.close();
+        try {
+          await handle.close();
+        } finally {
+          if (deleteOnClose) {
+            await invoke<void>("delete_temporary_zip", { path: scopedPath }).catch(() => undefined);
+          }
+        }
       }
     };
   },

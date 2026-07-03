@@ -716,7 +716,7 @@ export function App() {
         };
         await realtimeClient.sendAsset(
           toRealtimeAssetMeta(message, resumedAsset),
-          await platformAdapter.createNativeBinarySource(sourcePath, session.expectedSize),
+          await platformAdapter.createNativeBinarySource(sourcePath, session.expectedSize, asset.isFolder),
           { sha256: sha256ForAsset(resumedAsset) }
         );
         state.markMessageStatus(session.messageId, "queued");
@@ -738,6 +738,11 @@ export function App() {
 
     if (!runtimeConfig.signalingConfigured) {
       setConnectionStatus("failed");
+      setDiagnostic({
+        tone: "danger",
+        title: "接続設定が未完了です",
+        detail: "シグナリングURLが設定されていないため接続できません。設定を確認してください。"
+      });
       return;
     }
 
@@ -1364,7 +1369,7 @@ async function createBinarySource(asset: NonNullable<ChatMessage["asset"]> | Non
     throw new Error(`${asset.name} is not readable from this session.`);
   }
 
-  return platformAdapter.createNativeBinarySource(asset.localPath, asset.size);
+  return platformAdapter.createNativeBinarySource(asset.localPath, asset.size, asset.isFolder);
 }
 
 async function persistReceivedAsset(

@@ -511,6 +511,18 @@ describe("chatStore", () => {
     });
   });
 
+  test("ignores an immediate duplicate send request for the same draft", async () => {
+    useChatStore.setState({ connectionStatus: "connected", draftText: "hello" });
+    const transport = vi.fn(() => new Promise<void>(() => undefined));
+
+    void useChatStore.getState().sendDraft(transport);
+    void useChatStore.getState().sendDraft(transport);
+    await Promise.resolve();
+
+    expect(useChatStore.getState().messages).toHaveLength(1);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
   test("cancels an outgoing file message and records transfer state", async () => {
     useChatStore.setState({ connectionStatus: "connected", attachments: [attachment({ id: "file_1", localPath: "/tmp/doc.pdf" })] });
     void useChatStore.getState().sendDraft(() => new Promise(() => undefined));

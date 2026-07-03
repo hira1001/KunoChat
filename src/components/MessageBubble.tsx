@@ -93,13 +93,13 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, o
         {/* Meta row: time + status + actions */}
         <div className={clsx("mt-1 flex max-w-full flex-wrap items-center gap-1 text-[10px] text-faint", mine ? "mr-1 justify-end" : "ml-1")}>
           <span>{formatTime(message.createdAt)}</span>
-          {mine ? <MessageStatusIcon status={message.status} /> : null}
+          {mine ? <MessageStatusIcon message={message} /> : null}
           {canPause ? (
             <ActionButton
               id={`pause-${message.id}`}
               label="転送を一時停止"
               icon={<Pause className="h-3 w-3" />}
-              text="Pause"
+              text="一時停止"
               onClick={() => onPause?.(message.id)}
               variant="muted"
             />
@@ -109,7 +109,7 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, o
               id={`resume-${message.id}`}
               label="転送を再開"
               icon={<Play className="h-3 w-3" />}
-              text="Resume"
+              text="再開"
               onClick={() => onResume?.(message.id)}
               variant="accent"
             />
@@ -119,7 +119,7 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, o
               id={`download-${message.id}`}
               label={message.status === "failed" ? "転送を再開" : "ファイルをダウンロード"}
               icon={<Play className="h-3 w-3" />}
-              text={message.status === "failed" ? "Resume" : "Download"}
+              text={message.status === "failed" ? "再開" : "保存"}
               onClick={() => onDownload?.(message.id)}
               variant="accent"
             />
@@ -129,7 +129,7 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, o
               id={`cancel-${message.id}`}
               label="送信をキャンセル"
               icon={<X className="h-3 w-3" />}
-              text="Cancel"
+              text="取消"
               onClick={() => onCancel?.(message.id)}
               variant="muted"
             />
@@ -139,7 +139,7 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, o
               id={`retry-${message.id}`}
               label="再送する"
               icon={<RotateCcw className="h-3 w-3" />}
-              text="Retry"
+              text="再送"
               onClick={() => onRetry?.(message.id)}
               variant="danger"
             />
@@ -184,9 +184,23 @@ function ActionButton({ id, label, icon, text, onClick, variant }: ActionButtonP
   );
 }
 
-function MessageStatusIcon({ status }: { status: ChatMessage["status"] }) {
+function MessageStatusIcon({ message }: { message: ChatMessage }) {
+  const status = message.status;
+  if (status === "queued" && message.error?.code === "pending_connection") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-pill bg-surface-hover px-1.5 py-0.5 text-[10px] font-semibold text-muted">
+        <Clock3 className="h-3 w-3" />
+        送信待ち
+      </span>
+    );
+  }
   if (status === "sending" || status === "queued") {
-    return <Clock3 className="h-3 w-3 animate-pulse text-faint" />;
+    return (
+      <span className="inline-flex items-center gap-1 text-faint">
+        <Clock3 className="h-3 w-3 animate-pulse" />
+        {status === "sending" ? "送信中" : "待機中"}
+      </span>
+    );
   }
   if (status === "sent") {
     return <Check className="h-3 w-3 text-accent/70" />;

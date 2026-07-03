@@ -237,6 +237,28 @@ export function App() {
   }, [currentView]);
 
   useEffect(() => {
+    const recoverConnection = () => {
+      const status = useChatStore.getState().connectionStatus;
+      if (status !== "connected" && lastAutoConnect) {
+        handleRetryAutoConnect();
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        recoverConnection();
+      }
+    };
+    window.addEventListener("online", recoverConnection);
+    window.addEventListener("focus", recoverConnection);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("online", recoverConnection);
+      window.removeEventListener("focus", recoverConnection);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [lastAutoConnect]);
+
+  useEffect(() => {
     realtimeClient.configure({
       onStatus: (status) => {
         setConnectionStatus(status);
@@ -606,7 +628,9 @@ export function App() {
   }
 
   function handleForgetPeer() {
+    const state = useChatStore.getState();
     realtimeClient.disconnect();
+    setConversationTrustedPeer(state.activeConversationId, undefined);
     updateSettings({
       trustedPeer: undefined,
       peerDisplayName: undefined,
@@ -919,6 +943,7 @@ export function App() {
     if (!sessionPeerId || request.requesterPeerId === currentSettings.localPeerId) {
       return;
     }
+    const source = request.peerHint.startsWith("100.") ? "tailscale" : "lan";
 
     if (useChatStore.getState().connectionStatus === "connected") {
       realtimeClient.disconnect();
@@ -928,7 +953,7 @@ export function App() {
       peerId: request.requesterPeerId,
       displayName: request.requesterName || "Peer",
       peerHint: request.peerHint,
-      source: "lan"
+      source
     });
     setConnectionRequest(undefined);
     setLastAutoConnect({
@@ -936,7 +961,7 @@ export function App() {
       roomId: request.roomId,
       mode: "host",
       peerHint: request.peerHint,
-      source: "lan",
+      source,
       deviceName: request.requesterName
     });
     setDiagnostic({
@@ -1109,6 +1134,8 @@ export function App() {
       {currentView === "settings" ? (
         <SettingsScreen
           settings={settings}
+          currentPeerName={activeConversation?.displayName}
+          currentTrustedPeer={activeConversation?.trustedPeer}
           onChange={handleSettingsChange}
           onClose={() => setView("main")}
           onPickSaveFolder={handlePickSaveFolder}
@@ -1426,6 +1453,7 @@ async function sendConnectionRequest(
     };
     socket.onerror = () => {
       window.clearTimeout(timer);
+      socket.close();
       reject(new Error(`Cannot reach KunoChat at ${signalingUrl}.`));
     };
   });

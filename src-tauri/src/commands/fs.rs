@@ -1,7 +1,8 @@
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    fs::File,
+    collections::HashSet,
+    fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
@@ -309,13 +310,19 @@ fn zip_dir_recursive<W: Write + Seek>(
     src_dir: &Path,
     current_dir: &Path,
     zip: &mut zip::ZipWriter<W>,
+    visited_dirs: &mut HashSet<PathBuf>,
 ) -> Result<(), String> {
+    let canonical_dir = current_dir.canonicalize().map_err(|e| e.to_string())?;
+    if !visited_dirs.insert(canonical_dir) {
+        return Ok(());
+    }
+
     let entries = std::fs::read_dir(current_dir).map_err(|e| e.to_string())?;
     for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
         let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
-        if metadata.file_type().is_symlink() {
+        if metadata.file_type().is_symlink() || is_windows_reparse_point(&metadata) {
             continue;
         }
 
@@ -328,7 +335,7 @@ fn zip_dir_recursive<W: Write + Seek>(
         if metadata.is_dir() {
             zip.add_directory(&name, FileOptions::default())
                 .map_err(|e| e.to_string())?;
-            zip_dir_recursive(src_dir, &path, zip)?;
+            zip_dir_recursive(src_dir, &path, zip, visited_dirs)?;
         } else if metadata.is_file() {
             zip.start_file(&name, FileOptions::default())
                 .map_err(|e| e.to_string())?;
@@ -337,6 +344,17 @@ fn zip_dir_recursive<W: Write + Seek>(
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn is_windows_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    metadata.file_attributes() & 0x400 != 0
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_windows_reparse_point(_metadata: &std::fs::Metadata) -> bool {
+    false
 }
 
 fn uuid_hint() -> String {
@@ -355,6 +373,29 @@ fn rand_hint() -> u32 {
     val
 }
 
+fn create_temp_zip_file(folder_name: &str) -> Result<(PathBuf, File), String> {
+    let safe_folder_name = sanitize_filename(folder_name);
+    for attempt in 0..100 {
+        let temp_zip_name = format!(
+            "KunoChat_Dir_{}_{}_{}.zip",
+            safe_folder_name,
+            uuid_hint(),
+            attempt
+        );
+        let temp_zip_path = std::env::temp_dir().join(temp_zip_name);
+        match OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp_zip_path)
+        {
+            Ok(file) => return Ok((temp_zip_path, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Err("failed to create a unique temporary zip file".to_string())
+}
+
 #[tauri::command]
 pub async fn zip_directory(dir_path: String) -> Result<FileMetadata, String> {
     let src_dir = Path::new(&dir_path);
@@ -368,13 +409,11 @@ pub async fn zip_directory(dir_path: String) -> Result<FileMetadata, String> {
         .unwrap_or("folder")
         .to_string();
 
-    let temp_zip_name = format!("KunoChat_Dir_{}_{}.zip", folder_name, uuid_hint());
-    let temp_zip_path = std::env::temp_dir().join(&temp_zip_name);
-
-    let zip_file = File::create(&temp_zip_path).map_err(|e| e.to_string())?;
+    let (temp_zip_path, zip_file) = create_temp_zip_file(&folder_name)?;
     let mut zip = zip::ZipWriter::new(zip_file);
 
-    zip_dir_recursive(src_dir, src_dir, &mut zip)?;
+    let mut visited_dirs = HashSet::new();
+    zip_dir_recursive(src_dir, src_dir, &mut zip, &mut visited_dirs)?;
     zip.finish().map_err(|e| e.to_string())?;
 
     let metadata = std::fs::metadata(&temp_zip_path).map_err(|e| e.to_string())?;
@@ -509,10 +548,16 @@ pub async fn delete_part_file(
 }
 
 fn sanitize_filename(filename: &str) -> String {
-    filename
+    let sanitized = filename
         .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
         .trim()
-        .to_string()
+        .trim_matches('.')
+        .to_string();
+    if sanitized.is_empty() || sanitized == "." || sanitized == ".." {
+        "file".to_string()
+    } else {
+        sanitized
+    }
 }
 
 fn is_sha256(value: &str) -> bool {
@@ -539,7 +584,7 @@ mod tests {
 
     #[test]
     fn sanitize_filename_replaces_path_separators() {
-        assert_eq!(sanitize_filename("../bad/file.txt"), ".._bad_file.txt");
+        assert_eq!(sanitize_filename("../bad/file.txt"), "_bad_file.txt");
     }
 
     #[test]
@@ -553,6 +598,12 @@ mod tests {
     #[test]
     fn sanitize_filename_trims_whitespace() {
         assert_eq!(sanitize_filename("  file.txt  "), "file.txt");
+    }
+
+    #[test]
+    fn sanitize_filename_rejects_dot_only_names() {
+        assert_eq!(sanitize_filename(".."), "file");
+        assert_eq!(sanitize_filename("."), "file");
     }
 
     #[test]

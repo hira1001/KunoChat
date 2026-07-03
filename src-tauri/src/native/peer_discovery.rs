@@ -71,6 +71,7 @@ async fn run_discovery(app: AppHandle) -> Result<(), String> {
             }
             received = socket.recv_from(&mut buffer) => {
                 let Ok((length, remote_addr)) = received else {
+                    time::sleep(Duration::from_millis(100)).await;
                     continue;
                 };
                 let Ok(message) = serde_json::from_slice::<DiscoveryMessage>(&buffer[..length]) else {

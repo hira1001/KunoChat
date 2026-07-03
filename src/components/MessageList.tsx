@@ -92,12 +92,12 @@ function EmptyState({ isConnected, onPair }: { isConnected: boolean; onPair?: ()
           )}
         </div>
         <div className="mt-3 text-[15px] font-semibold text-text">
-          {isConnected ? "何か送ってみましょう" : "相手のPCとペアリング"}
+          {isConnected ? "何か送ってみましょう" : "未接続でも送信待ちにできます"}
         </div>
         <div className="mx-auto mt-1.5 max-w-[220px] text-[12px] leading-[1.6] text-muted">
           {isConnected
             ? "テキストを入力するか、ファイルをここにドロップしてください。"
-            : "接続が確立するまで、本文やファイルは外部へ送信されません。"}
+            : "メッセージやファイルはこのPCに保存され、相手を選ぶと自動送信されます。"}
         </div>
         {!isConnected && onPair ? (
           <button
@@ -105,7 +105,7 @@ function EmptyState({ isConnected, onPair }: { isConnected: boolean; onPair?: ()
             onClick={onPair}
             className="kuno-focus-ring mt-4 h-8 rounded-input bg-accent px-3 text-[11px] font-semibold text-white transition-colors hover:bg-accent-hover active:scale-[0.98]"
           >
-            Pair a device
+            接続先を選ぶ
           </button>
         ) : null}
       </div>

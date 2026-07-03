@@ -10,6 +10,7 @@ use tokio::time;
 
 const SIGNALING_PORT: u16 = 8787;
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(2);
+const DISCOVERY_ERROR_BACKOFF: Duration = Duration::from_secs(60);
 const REEMIT_AFTER: Duration = Duration::from_secs(5);
 
 #[derive(Deserialize)]
@@ -71,13 +72,21 @@ pub fn start(app: AppHandle) {
 async fn run_discovery(app: AppHandle) {
     let mut interval = time::interval(DISCOVERY_INTERVAL);
     let mut last_candidate: Option<(String, Instant)> = None;
+    let mut next_status_attempt = Instant::now();
 
     loop {
         interval.tick().await;
 
+        let now = Instant::now();
+        if now < next_status_attempt {
+            continue;
+        }
+
         let Ok(status) = read_tailscale_status() else {
+            next_status_attempt = now + DISCOVERY_ERROR_BACKOFF;
             continue;
         };
+        next_status_attempt = now + DISCOVERY_INTERVAL;
         for candidate in select_candidates(&status) {
             if !is_kunochat_reachable(&candidate.probe_host) {
                 continue;

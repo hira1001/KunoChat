@@ -15,6 +15,12 @@ export function useLocalImagePreview(path: string | undefined, mime: string | un
       return undefined;
     }
 
+    const directUrl = platformAdapter.filePreviewUrl(path, mime);
+    if (directUrl) {
+      setPreviewUrl(directUrl);
+      return undefined;
+    }
+
     void platformAdapter.createImagePreviewUrl(path, mime, maxPreviewBytes).then((url) => {
       if (cancelled) {
         if (url) {

@@ -9,7 +9,7 @@ describe("binary channel chunk framing", () => {
   test.each([
     ["tr_1", [1]],
     ["transfer-long-id", [1, 2, 3, 4]],
-    ["日本語id", [255, 0, 128]],
+    ["jp_id", [255, 0, 128]],
     ["empty-payload", []],
     ["x".repeat(128), [7, 8, 9]]
   ])("round-trips transfer id and payload %#", (transferId, payload) => {
@@ -54,6 +54,10 @@ describe("binary channel chunk framing", () => {
   test("rejects a frame whose declared id exceeds its bytes", () => {
     const frame = new Uint8Array([0, 8, 1, 2]).buffer;
     expect(() => decodeBinaryChunk(frame)).toThrow("invalid id length");
+  });
+
+  test("rejects a frame with an invalid transfer id", () => {
+    expect(() => decodeBinaryChunk(encodeBinaryChunk("日本語id", bytes([1])))).toThrow("invalid transfer id");
   });
 });
 

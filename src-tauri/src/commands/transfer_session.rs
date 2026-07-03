@@ -213,7 +213,6 @@ impl TransferSessionRegistry {
             .open(&temporary)
             .map_err(|error| error.to_string())?;
         file.write_all(&bytes).map_err(|error| error.to_string())?;
-        file.sync_all().map_err(|error| error.to_string())?;
         drop(file);
 
         if self.path.exists() {

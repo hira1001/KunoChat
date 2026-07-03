@@ -16,6 +16,7 @@ export type TransferHistoryItem = {
 
 const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 let dbPromise: Promise<Database> | null = null;
+let dbQueue: Promise<void> = Promise.resolve();
 
 async function getDb(): Promise<Database | null> {
   if (!hasTauri) {
@@ -44,7 +45,7 @@ async function getDb(): Promise<Database | null> {
 
 export const dbService = {
   async logTransfer(item: Omit<TransferHistoryItem, "timestamp">) {
-    try {
+    dbQueue = dbQueue.then(async () => {
       const db = await getDb();
       if (!db) return;
       const timestamp = Date.now();
@@ -63,6 +64,11 @@ export const dbService = {
           item.isFolder ? 1 : 0
         ]
       );
+    }).catch((err) => {
+      console.error("Database logTransfer failed:", err);
+    });
+    try {
+      await dbQueue;
     } catch (err) {
       console.error("Database logTransfer failed:", err);
     }

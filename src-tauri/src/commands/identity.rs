@@ -3,6 +3,11 @@ use keyring::{Entry, Error as KeyringError};
 use rand_core::OsRng;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    path::PathBuf,
+};
 
 const KEYRING_SERVICE: &str = "com.kunochat.app";
 const KEYRING_ACCOUNT: &str = "device-identity-v1";
@@ -48,18 +53,57 @@ pub async fn verify_device_signature(
 }
 
 fn load_or_create_signing_key() -> Result<SigningKey, String> {
-    let entry = Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT).map_err(|error| error.to_string())?;
+    let entry = match Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT) {
+        Ok(entry) => entry,
+        Err(error) => return load_or_create_file_signing_key(&format!("keyring init failed: {error}")),
+    };
     match entry.get_secret() {
         Ok(seed) => signing_key_from_seed(&seed),
         Err(KeyringError::NoEntry) => {
             let signing_key = SigningKey::generate(&mut OsRng);
-            entry.set_secret(&signing_key.to_bytes()).map_err(|error| {
-                format!("failed to store device key in secure storage: {error}")
-            })?;
+            if let Err(error) = entry.set_secret(&signing_key.to_bytes()) {
+                return store_file_signing_key(signing_key, &format!("keyring write failed: {error}"));
+            }
             Ok(signing_key)
         }
-        Err(error) => Err(format!("failed to access secure device storage: {error}")),
+        Err(error) => load_or_create_file_signing_key(&format!("keyring read failed: {error}")),
     }
+}
+
+fn load_or_create_file_signing_key(reason: &str) -> Result<SigningKey, String> {
+    eprintln!("KunoChat falling back to file device key storage: {reason}");
+    let path = fallback_key_path()?;
+    if path.exists() {
+        let seed = fs::read(&path).map_err(|error| error.to_string())?;
+        return signing_key_from_seed(&seed);
+    }
+
+    let signing_key = SigningKey::generate(&mut OsRng);
+    store_file_signing_key(signing_key, reason)
+}
+
+fn store_file_signing_key(signing_key: SigningKey, reason: &str) -> Result<SigningKey, String> {
+    eprintln!("KunoChat storing fallback file device key: {reason}");
+    let path = fallback_key_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&path)
+        .or_else(|_| OpenOptions::new().write(true).truncate(true).open(&path))
+        .map_err(|error| error.to_string())?;
+    file.write_all(&signing_key.to_bytes())
+        .map_err(|error| error.to_string())?;
+    Ok(signing_key)
+}
+
+fn fallback_key_path() -> Result<PathBuf, String> {
+    let base = dirs::data_local_dir()
+        .or_else(dirs::home_dir)
+        .ok_or_else(|| "fallback device key directory is unavailable".to_string())?;
+    Ok(base.join("KunoChat").join("device-identity-v1.key"))
 }
 
 fn signing_key_from_seed(seed: &[u8]) -> Result<SigningKey, String> {

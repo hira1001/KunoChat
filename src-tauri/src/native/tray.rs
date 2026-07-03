@@ -52,7 +52,9 @@ pub fn build_tray(app: &mut App) -> tauri::Result<()> {
             }
             "downloads" => {
                 if let Some(downloads) = dirs::download_dir() {
-                    let _ = open::that(downloads.join("KunoChat"));
+                    let kunochat_downloads = downloads.join("KunoChat");
+                    let _ = std::fs::create_dir_all(&kunochat_downloads);
+                    let _ = open::that(kunochat_downloads);
                 }
             }
             "settings" => {

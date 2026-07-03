@@ -1,5 +1,5 @@
 import { FolderOpen, Moon, Sun, Trash2, X, RefreshCw, Download, CheckCircle, AlertTriangle, ShieldOff } from "lucide-react";
-import type { KunoSettings } from "../features/chat/messageTypes";
+import type { KunoSettings, TrustedPeer } from "../features/chat/messageTypes";
 import clsx from "clsx";
 import { useEffect, useState } from "react";
 import { check } from "@tauri-apps/plugin-updater";
@@ -18,6 +18,8 @@ type UpdateState =
 
 type SettingsScreenProps = {
   settings: KunoSettings;
+  currentPeerName?: string;
+  currentTrustedPeer?: TrustedPeer;
   onChange: (settings: Partial<KunoSettings>) => void;
   onClose: () => void;
   onPickSaveFolder: () => void;
@@ -25,10 +27,12 @@ type SettingsScreenProps = {
   onForgetPeer: () => void;
 };
 
-export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, onClearHistory, onForgetPeer }: SettingsScreenProps) {
+export function SettingsScreen({ settings, currentPeerName, currentTrustedPeer, onChange, onClose, onPickSaveFolder, onClearHistory, onForgetPeer }: SettingsScreenProps) {
   const isDark = settings.theme === "dark";
   const [currentVersion, setCurrentVersion] = useState<string>("0.2.0");
   const [updateState, setUpdateState] = useState<UpdateState>({ type: "idle" });
+  const trustedPeer = currentTrustedPeer ?? settings.trustedPeer;
+  const peerName = currentPeerName ?? settings.peerDisplayName;
 
   useEffect(() => {
     getVersion().then(setCurrentVersion).catch((err) => console.error(err));
@@ -206,11 +210,11 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
             <ShieldOff className="mt-0.5 h-4 w-4 shrink-0 text-muted" />
             <div className="min-w-0 flex-1">
               <div className="truncate text-[13px] font-semibold text-text">
-                {settings.trustedPeer ? settings.peerDisplayName || "ペア済みデバイス" : "ペア済みデバイスなし"}
+                {trustedPeer ? peerName || "ペア済みデバイス" : "ペア済みデバイスなし"}
               </div>
               <div className="mt-0.5 break-words text-[11px] leading-4 text-faint">
-                {settings.trustedPeer
-                  ? `Fingerprint: ${settings.trustedPeer.fingerprint}`
+                {trustedPeer
+                  ? `Fingerprint: ${trustedPeer.fingerprint}`
                   : "相手PCと接続すると、このPCに相手デバイスの鍵を保存します。"}
               </div>
             </div>
@@ -219,7 +223,7 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
             type="button"
             id="forget-peer-btn"
             onClick={onForgetPeer}
-            disabled={!settings.trustedPeer && !settings.peerDisplayName}
+            disabled={!trustedPeer && !peerName}
             className="kuno-focus-ring mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-input border border-border bg-bg px-3 text-[12px] font-semibold text-text transition-all duration-150 enabled:hover:border-danger/40 enabled:hover:bg-red-50 enabled:hover:text-danger enabled:active:scale-[0.99] disabled:cursor-not-allowed disabled:text-faint dark:enabled:hover:bg-red-950/30"
           >
             <ShieldOff className="h-3.5 w-3.5" />
@@ -337,7 +341,11 @@ export function SettingsScreen({ settings, onChange, onClose, onPickSaveFolder, 
         <button
           type="button"
           id="clear-history-btn"
-          onClick={onClearHistory}
+          onClick={() => {
+            if (window.confirm("チャット履歴を消去しますか？この操作は元に戻せません。")) {
+              onClearHistory();
+            }
+          }}
           className="kuno-focus-ring mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-card border border-danger/30 bg-surface text-[12px] font-semibold text-danger shadow-card transition-all duration-200 hover:border-danger hover:bg-red-50 active:scale-[0.99] dark:hover:bg-red-950/30"
         >
           <Trash2 className="h-4 w-4" />

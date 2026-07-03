@@ -38,6 +38,10 @@ export const MAX_ASSET_SIZE_BYTES = 10 * 1024 * 1024 * 1024;
 const MAX_TRANSFER_ID_LENGTH = 128;
 const DEVICE_PUBLIC_KEY_PATTERN = /^[a-f0-9]{64}$/i;
 const IDENTITY_NONCE_PATTERN = /^[a-f0-9]{64}$/i;
+const HEARTBEAT_INTERVAL_MS = 10_000;
+const HEARTBEAT_TIMEOUT_MS = 30_000;
+const MAX_RECONNECT_ATTEMPTS = 12;
+const BINARY_BUFFER_WAIT_TIMEOUT_MS = 30_000;
 
 type IdentityHandshake = {
   local?: { publicKey: string; fingerprint: string };
@@ -152,6 +156,8 @@ class KunoRealtimeClient {
   private lastTypingSent = 0;
   private reconnectTimer?: number;
   private reconnectAttempts = 0;
+  private heartbeatTimer?: number;
+  private lastHeartbeatAt = 0;
   private manualDisconnect = false;
   private incomingTransfers = new Map<string, IncomingTransfer>();
   private outgoingTransfers = new Map<string, OutgoingTransfer>();
@@ -202,6 +208,7 @@ class KunoRealtimeClient {
   }
 
   private closeTransport() {
+    this.stopHeartbeat();
     if (this.control) {
       this.control.onclose = null;
       this.control.onerror = null;
@@ -444,7 +451,7 @@ class KunoRealtimeClient {
             ? await source.slice(offset, offset + chunkSize).arrayBuffer()
             : await source.readChunk(offset, chunkSize);
         this.throwIfCancelled(outgoingTransfer);
-        if (!this.binary) {
+        if (!this.binary || this.binary.readyState !== "open") {
           throw new Error("Binary channel was closed during transfer.");
         }
         this.binary.send(encodeBinaryChunk(meta.transferId, bytes));
@@ -741,6 +748,7 @@ class KunoRealtimeClient {
 
       socket.onerror = () => {
         window.clearTimeout(timer);
+        socket.close();
         reject(new Error(`Cannot reach signaling server at ${signalingUrl}.`));
       };
     }).catch((error) => {
@@ -757,9 +765,16 @@ class KunoRealtimeClient {
         this.callbacks?.onError("Invalid signaling message received.");
       }
     };
-    socket.onclose = () => {
-      if (!this.manualDisconnect && this.peer?.connectionState === "connected") {
+    socket.onerror = () => {
+      if (!this.manualDisconnect) {
         this.callbacks?.onStatus("reconnecting");
+        this.scheduleReconnect();
+      }
+    };
+    socket.onclose = () => {
+      if (!this.manualDisconnect) {
+        this.callbacks?.onStatus("reconnecting");
+        this.scheduleReconnect();
       }
     };
   }
@@ -1121,6 +1136,11 @@ class KunoRealtimeClient {
 
     if (message.type === "ping") {
       this.sendControl({ v: 1, type: "pong", at: Date.now() });
+      return;
+    }
+
+    if (message.type === "pong") {
+      this.lastHeartbeatAt = Date.now();
     }
   }
 
@@ -1208,7 +1228,7 @@ class KunoRealtimeClient {
     });
     this.reconnectAttempts = 0;
     this.callbacks?.onStatus("connected");
-    this.sendControl({ v: 1, type: "ping", at: Date.now() });
+    this.startHeartbeat();
     this.reannouncePendingAssets();
   }
 
@@ -1274,7 +1294,7 @@ class KunoRealtimeClient {
   }
 
   private async waitForBinaryBuffer() {
-    if (!this.binary) {
+    if (!this.binary || this.binary.readyState !== "open") {
       throw new Error("Binary channel is not open.");
     }
 
@@ -1284,33 +1304,38 @@ class KunoRealtimeClient {
 
     await new Promise<void>((resolve, reject) => {
       const channel = this.binary;
-      if (!channel) {
-        resolve();
+      if (!channel || channel.readyState !== "open") {
+        reject(new Error("Binary channel is not open."));
         return;
       }
-      const originalHandler = channel.onbufferedamountlow;
-      const originalError = channel.onerror;
-      const originalClose = channel.onclose;
-      const restoreHandlers = () => {
-        channel.onbufferedamountlow = originalHandler ?? null;
-        channel.onerror = originalError ?? null;
-        channel.onclose = originalClose ?? null;
+
+      const cleanup = () => {
+        window.clearTimeout(timer);
+        channel.removeEventListener("bufferedamountlow", onLow);
+        channel.removeEventListener("error", onError);
+        channel.removeEventListener("close", onClose);
       };
-      channel.onbufferedamountlow = (event) => {
-        originalHandler?.call(channel, event);
-        restoreHandlers();
+
+      const onLow = () => {
+        cleanup();
         resolve();
       };
-      channel.onerror = (event) => {
-        restoreHandlers();
-        originalError?.call(channel, event);
+      const onError = () => {
+        cleanup();
         reject(new Error("Binary channel failed while waiting for buffer pressure to clear."));
       };
-      channel.onclose = (event) => {
-        restoreHandlers();
-        originalClose?.call(channel, event);
+      const onClose = () => {
+        cleanup();
         reject(new Error("Binary channel closed while waiting for buffer pressure to clear."));
       };
+      const timer = window.setTimeout(() => {
+        cleanup();
+        reject(new Error("Binary channel stayed congested for too long."));
+      }, BINARY_BUFFER_WAIT_TIMEOUT_MS);
+
+      channel.addEventListener("bufferedamountlow", onLow);
+      channel.addEventListener("error", onError);
+      channel.addEventListener("close", onClose);
     });
   }
 
@@ -1484,9 +1509,7 @@ class KunoRealtimeClient {
         }
 
         if (transfer.meta.kind === "image" || transfer.meta.mime.startsWith("image/")) {
-          const fileBytes = await platformAdapter.readEntireFile(savePath, transfer.meta.size);
-          blob = new Blob([fileBytes], { type: transfer.meta.mime });
-          objectUrl = URL.createObjectURL(blob);
+          objectUrl = platformAdapter.filePreviewUrl(savePath, transfer.meta.mime) ?? "";
         }
       } catch (err) {
         console.error("[realtimeClient] Failed to finalize received asset:", err);
@@ -1513,12 +1536,16 @@ class KunoRealtimeClient {
 
     void platformAdapter.removeTransferSession(transferId);
 
-    this.sendControl({
-      v: 1,
-      type: "ack",
-      id: transfer.meta.messageId,
-      receivedAt: Date.now()
-    });
+    try {
+      this.sendControl({
+        v: 1,
+        type: "ack",
+        id: transfer.meta.messageId,
+        receivedAt: Date.now()
+      });
+    } catch {
+      this.scheduleReconnect();
+    }
   }
 
   private sendSignal(message: { type: "offer" | "answer" | "ice"; payload: unknown }) {
@@ -1535,8 +1562,47 @@ class KunoRealtimeClient {
     this.reconnectTimer = undefined;
   }
 
+  private startHeartbeat() {
+    this.stopHeartbeat();
+    this.lastHeartbeatAt = Date.now();
+    this.sendControl({ v: 1, type: "ping", at: this.lastHeartbeatAt });
+    this.heartbeatTimer = window.setInterval(() => {
+      if (this.manualDisconnect || !this.isReady()) {
+        return;
+      }
+
+      const now = Date.now();
+      if (now - this.lastHeartbeatAt > HEARTBEAT_TIMEOUT_MS) {
+        this.stopHeartbeat();
+        this.callbacks?.onStatus("reconnecting");
+        this.closeTransport();
+        this.scheduleReconnect();
+        return;
+      }
+
+      try {
+        this.sendControl({ v: 1, type: "ping", at: now });
+      } catch {
+        this.stopHeartbeat();
+        this.callbacks?.onStatus("reconnecting");
+        this.scheduleReconnect();
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeat() {
+    window.clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
+  }
+
   private scheduleReconnect() {
     if (this.manualDisconnect || !this.options || this.reconnectTimer) {
+      return;
+    }
+
+    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      this.callbacks?.onStatus("failed");
+      this.callbacks?.onError("相手PCに再接続できません。相手のKunoChatを起動してから、もう一度接続してください。");
       return;
     }
 
@@ -1584,6 +1650,9 @@ export function decodeBinaryChunk(data: ArrayBuffer): { transferId: string; payl
     throw new Error("Binary transfer frame has an invalid id length.");
   }
   const transferId = new TextDecoder().decode(data.slice(idStart, payloadStart));
+  if (!isValidTransferId(transferId)) {
+    throw new Error("Binary transfer frame has an invalid transfer id.");
+  }
   return {
     transferId,
     payload: data.slice(payloadStart)

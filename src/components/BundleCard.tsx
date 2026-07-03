@@ -41,8 +41,8 @@ export function BundleCard({ bundle, status }: BundleCardProps) {
         {/* Bundle info */}
         <div className="min-w-0 flex-1 overflow-hidden">
           <div className="truncate text-[13px] font-semibold tracking-[-0.01em] text-text">{title}</div>
-          <div className="mt-1.5 space-y-0.5">
-            {bundle.items.slice(0, 3).map((item) => {
+          <div className="kuno-scrollbar mt-1.5 max-h-32 space-y-0.5 overflow-y-auto pr-1">
+            {bundle.items.map((item) => {
               const openPath = item.savePath ?? item.localPath;
               return (
                 <div key={item.id} className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted">
@@ -61,9 +61,6 @@ export function BundleCard({ bundle, status }: BundleCardProps) {
                 </div>
               );
             })}
-            {bundle.items.length > 3 ? (
-              <div className="text-[11px] text-faint">+{bundle.items.length - 3} 件</div>
-            ) : null}
           </div>
           <div className="mt-2 flex items-center gap-2 text-[11px]">
             <span className="text-muted">{bundle.count}ファイル · {formatBytes(bundle.totalSize)}</span>

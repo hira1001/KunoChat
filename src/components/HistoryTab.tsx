@@ -45,7 +45,11 @@ export function HistoryTab() {
         {history.length > 0 && (
           <button
             type="button"
-            onClick={() => void clearHistoryList()}
+            onClick={() => {
+              if (window.confirm("転送履歴を消去しますか？この操作は元に戻せません。")) {
+                void clearHistoryList();
+              }
+            }}
             className="kuno-focus-ring flex items-center gap-1.5 rounded-pill border border-danger/30 bg-surface px-2.5 py-1 text-[11px] font-semibold text-danger transition-all duration-150 hover:bg-red-50 dark:hover:bg-red-950/20 active:scale-95"
           >
             <Trash2 className="h-3 w-3" />

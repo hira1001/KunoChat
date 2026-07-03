@@ -18,6 +18,10 @@ import type {
 import { dbService, type TransferHistoryItem } from "../storage/db";
 import { platformAdapter } from "../native/platformAdapter";
 
+const MAX_PERSISTED_MESSAGES = 500;
+const MAX_DRAFT_ATTACHMENTS = 30;
+const MAX_DRAFT_ATTACHMENT_BYTES = 10 * 1024 * 1024 * 1024;
+
 type ChatStore = {
   storageVersion: number;
   currentView: AppView;
@@ -46,7 +50,7 @@ type ChatStore = {
     platform?: string;
     fingerprint?: string;
   }) => string;
-  setConversationTrustedPeer: (conversationId: string, trustedPeer: TrustedPeer) => void;
+  setConversationTrustedPeer: (conversationId: string, trustedPeer?: TrustedPeer) => void;
   incrementUnread: () => void;
   clearUnread: () => void;
   setPeerTyping: (isTyping: boolean, at?: number) => void;
@@ -775,7 +779,10 @@ export const useChatStore = create<ChatStore>()(
         })),
       addAttachments: (attachments) =>
         set((state) => {
-          const nextAttachments = [...state.attachments, ...attachments];
+          const acceptedAttachments = attachments
+            .filter((attachment) => Number.isSafeInteger(attachment.size) && attachment.size >= 0 && attachment.size <= MAX_DRAFT_ATTACHMENT_BYTES)
+            .slice(0, Math.max(0, MAX_DRAFT_ATTACHMENTS - state.attachments.length));
+          const nextAttachments = [...state.attachments, ...acceptedAttachments];
           return {
             attachments: nextAttachments,
             conversationDrafts: {
@@ -789,6 +796,9 @@ export const useChatStore = create<ChatStore>()(
         }),
       removeAttachment: (id) =>
         set((state) => {
+          state.attachments
+            .filter((attachment) => attachment.id === id)
+            .forEach(revokeDraftAttachmentPreview);
           const nextAttachments = state.attachments.filter((attachment) => attachment.id !== id);
           return {
             attachments: nextAttachments,
@@ -802,16 +812,19 @@ export const useChatStore = create<ChatStore>()(
           };
         }),
       clearAttachments: () =>
-        set((state) => ({
-          attachments: [],
-          conversationDrafts: {
-            ...state.conversationDrafts,
-            [state.activeConversationId]: {
-              draftText: state.draftText,
-              attachments: []
+        set((state) => {
+          state.attachments.forEach(revokeDraftAttachmentPreview);
+          return {
+            attachments: [],
+            conversationDrafts: {
+              ...state.conversationDrafts,
+              [state.activeConversationId]: {
+                draftText: state.draftText,
+                attachments: []
+              }
             }
-          }
-        })),
+          };
+        }),
       setDraggingOver: (isDraggingOver) => set({ isDraggingOver }),
       sendDraft: async (transport) => {
         const { activeConversationId, connectionStatus, draftText, attachments, settings } = get();
@@ -1061,7 +1074,7 @@ function sanitizePersistedMessages(messages: unknown, fallback: ChatMessage[]): 
 }
 
 function serializeMessagesForStorage(messages: ChatMessage[]): ChatMessage[] {
-  return messages.map((message) => ({
+  return messages.slice(-MAX_PERSISTED_MESSAGES).map((message) => ({
     ...message,
     asset: message.asset ? withoutFile(message.asset) : undefined,
     bundle: message.bundle
@@ -1150,6 +1163,12 @@ function withoutFile<T extends { file?: File; previewUrl?: string }>(asset: T): 
     delete persistedAsset.previewUrl;
   }
   return persistedAsset as T;
+}
+
+function revokeDraftAttachmentPreview(attachment: DraftAttachment) {
+  if (attachment.previewUrl?.startsWith("blob:")) {
+    URL.revokeObjectURL(attachment.previewUrl);
+  }
 }
 
 function sanitizePersistedTransferStates(value: unknown): Record<string, TransferState> {

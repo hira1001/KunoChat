@@ -243,6 +243,9 @@ describe("chatStore", () => {
     const second = useChatStore.getState().conversations.find((conversation) => conversation.id === secondConversationId);
     expect(first?.trustedPeer).toMatchObject({ publicKey: "key-a", fingerprint: "fp-a" });
     expect(second?.trustedPeer).toBeUndefined();
+
+    useChatStore.getState().setConversationTrustedPeer(firstConversationId, undefined);
+    expect(useChatStore.getState().conversations.find((conversation) => conversation.id === firstConversationId)?.trustedPeer).toBeUndefined();
   });
 
   test("restores trusted peers from persisted conversations", () => {

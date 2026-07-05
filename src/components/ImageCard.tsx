@@ -74,7 +74,7 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
               className="kuno-focus-ring flex items-center gap-1.5 rounded-input border border-accent bg-accent px-3.5 py-1.5 text-[11px] font-bold text-white shadow-lg transition-all duration-150 hover:bg-accent-hover hover:scale-105 active:scale-95"
             >
               <Play className="h-3.5 w-3.5 fill-current" />
-              Download ({formatBytes(asset.size)})
+              ダウンロード ({formatBytes(asset.size)})
             </button>
           </div>
         ) : null}

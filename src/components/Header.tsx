@@ -47,8 +47,8 @@ export function Header({ status, peerName, conversations, activeConversationId, 
           <button
             type="button"
             id="header-history-btn"
-            aria-label="History"
-            title="History"
+            aria-label="履歴"
+            title="履歴"
             onClick={onHistory}
             className="kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-pill text-muted transition-all duration-150 hover:bg-surface-hover hover:text-text active:scale-95"
           >
@@ -114,7 +114,7 @@ export function Header({ status, peerName, conversations, activeConversationId, 
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[12px] font-semibold">{conversation.displayName}</span>
                     <span className="block truncate text-[10px] text-muted">
-                      {conversation.lastMessagePreview || conversation.peerHint || "No messages yet"}
+                      {conversation.lastMessagePreview || conversation.peerHint || "まだメッセージはありません"}
                     </span>
                   </span>
                   {conversation.unreadCount > 0 ? (

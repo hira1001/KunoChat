@@ -80,7 +80,7 @@ export function Composer({ value, hasAttachments, disabled = false, onChange, on
               type="button"
               id="composer-pick-btn"
               aria-label="ファイルを選択"
-              title="ファイルを選択 (⌘O)"
+              title="ファイルを選択"
               onClick={onPickFiles}
               className="kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted transition-all duration-150 hover:bg-surface-active hover:text-text active:scale-90"
             >

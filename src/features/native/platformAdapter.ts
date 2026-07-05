@@ -19,6 +19,7 @@ export type PickedFile = {
   mime: string;
   localPath?: string;
   previewUrl?: string;
+  file?: File;
 };
 
 export type NativeFileMetadata = {
@@ -92,6 +93,7 @@ type NativePartWriter = {
 };
 
 const hasTauri = "__TAURI_INTERNALS__" in window;
+const BROWSER_DEVICE_IDENTITY_KEY = "kunochat.browserDeviceIdentity.v1";
 let selectedSaveFolder: string | undefined;
 const partWriters = new Map<string, NativePartWriter>();
 let lastOverlayUnreadCount: number | undefined;
@@ -105,6 +107,40 @@ function filePreviewUrl(path: string | undefined, mime?: string): string | undef
   } catch {
     return undefined;
   }
+}
+
+function createBrowserPublicKey(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function fingerprintFromBrowserPublicKey(publicKey: string): string {
+  return publicKey.slice(0, 32).match(/.{1,2}/g)?.join(":") ?? publicKey.slice(0, 32);
+}
+
+function getBrowserDeviceIdentity(): DeviceIdentity {
+  const stored = localStorage.getItem(BROWSER_DEVICE_IDENTITY_KEY);
+  if (stored) {
+    try {
+      const parsed = JSON.parse(stored) as Partial<DeviceIdentity>;
+      if (typeof parsed.publicKey === "string" && /^[a-f0-9]{64}$/i.test(parsed.publicKey)) {
+        return {
+          publicKey: parsed.publicKey.toLowerCase(),
+          fingerprint: parsed.fingerprint || fingerprintFromBrowserPublicKey(parsed.publicKey)
+        };
+      }
+    } catch {
+      localStorage.removeItem(BROWSER_DEVICE_IDENTITY_KEY);
+    }
+  }
+  const publicKey = createBrowserPublicKey();
+  const identity = {
+    publicKey,
+    fingerprint: fingerprintFromBrowserPublicKey(publicKey)
+  };
+  localStorage.setItem(BROWSER_DEVICE_IDENTITY_KEY, JSON.stringify(identity));
+  return identity;
 }
 
 async function setTaskbarUnreadOverlay(count: number): Promise<void> {
@@ -256,7 +292,7 @@ export const platformAdapter = {
 
   async pickFiles(): Promise<PickedFile[]> {
     if (!hasTauri) {
-      return [];
+      return pickBrowserFiles();
     }
 
     const selection = await open({
@@ -497,7 +533,7 @@ export const platformAdapter = {
 
   async getDeviceIdentity(): Promise<DeviceIdentity> {
     if (!hasTauri) {
-      throw new Error("Device identity is only available in the installed desktop app.");
+      return getBrowserDeviceIdentity();
     }
     return invoke<DeviceIdentity>("get_device_identity");
   },
@@ -646,4 +682,54 @@ function inferMime(name: string): string {
     return "application/zip";
   }
   return "application/octet-stream";
+}
+
+function pickBrowserFiles(): Promise<PickedFile[]> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.style.position = "fixed";
+    input.style.left = "-9999px";
+    input.style.top = "0";
+    input.style.opacity = "0";
+
+    const cleanup = () => {
+      input.remove();
+    };
+
+    input.addEventListener(
+      "change",
+      () => {
+        const files = Array.from(input.files ?? []);
+        cleanup();
+        resolve(
+          files.map((file, index) => {
+            const mime = file.type || inferMime(file.name);
+            return {
+              id: `picked_${Date.now()}_${index}`,
+              name: file.name || `file-${index + 1}`,
+              size: file.size,
+              mime,
+              file,
+              previewUrl: mime.startsWith("image/") ? URL.createObjectURL(file) : undefined
+            };
+          })
+        );
+      },
+      { once: true }
+    );
+
+    input.addEventListener(
+      "cancel",
+      () => {
+        cleanup();
+        resolve([]);
+      },
+      { once: true }
+    );
+
+    document.body.appendChild(input);
+    input.click();
+  });
 }

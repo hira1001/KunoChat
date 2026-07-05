@@ -160,28 +160,28 @@ export function SettingsScreen({ settings, currentPeerName, currentTrustedPeer, 
         <div className="mt-2 overflow-hidden rounded-card border border-border bg-surface shadow-card divide-y divide-border">
           <Toggle
             id="toggle-always-on-top"
-            label="Always on top"
+            label="常に前面に表示"
             description="他のウィンドウより常に前面に表示"
             checked={settings.alwaysOnTop}
             onChange={(value) => onChange({ alwaysOnTop: value })}
           />
           <Toggle
             id="toggle-launch-at-login"
-            label="Launch at login"
+            label="ログイン時に起動"
             description="ログイン時に自動的に起動"
             checked={settings.launchAtLogin}
             onChange={(value) => onChange({ launchAtLogin: value })}
           />
           <Toggle
             id="toggle-notifications"
-            label="Notifications"
+            label="通知"
             description="メッセージ受信時にOS通知を表示"
             checked={settings.notifications}
             onChange={(value) => onChange({ notifications: value })}
           />
           <Toggle
             id="toggle-sound"
-            label="Sound"
+            label="サウンド"
             description="送受信時に通知音を再生"
             checked={settings.sound}
             onChange={(value) => onChange({ sound: value })}
@@ -214,8 +214,8 @@ export function SettingsScreen({ settings, currentPeerName, currentTrustedPeer, 
               </div>
               <div className="mt-0.5 break-words text-[11px] leading-4 text-faint">
                 {trustedPeer
-                  ? `Fingerprint: ${trustedPeer.fingerprint}`
-                  : "相手PCと接続すると、このPCに相手デバイスの鍵を保存します。"}
+                  ? "接続済みです。次回からこの相手を選ぶだけで送信できます。"
+                  : "一度接続した相手はチャット一覧に残り、次回から選ぶだけで送信できます。"}
               </div>
             </div>
           </div>

@@ -129,7 +129,7 @@ export function FileCard({ asset, status, progress, error, speed, eta, onPause, 
                 className="kuno-focus-ring flex items-center gap-1 rounded-input border border-accent bg-accent px-2.5 py-1 text-[11px] font-bold text-white shadow-sm transition-all duration-150 hover:bg-accent-hover active:scale-95"
               >
                 <Play className="h-3 w-3 fill-current" />
-                {failed ? "Resume" : "Download"}
+                {failed ? "再開" : "ダウンロード"}
               </button>
             ) : null}
             {canOpen ? (

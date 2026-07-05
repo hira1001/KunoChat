@@ -77,7 +77,7 @@ export function BundleCard({ bundle, status }: BundleCardProps) {
                     void platformAdapter.revealPath(path);
                   }
                 }}
-                className="kuno-focus-ring ml-auto inline-flex h-6 shrink-0 items-center gap-1 rounded-input px-2 text-[11px] font-semibold text-accent transition-colors hover:bg-accent-soft"
+                className="kuno-focus-ring ml-auto inline-flex h-8 shrink-0 items-center gap-1 rounded-input px-2.5 text-[11px] font-semibold text-accent transition-colors hover:bg-accent-soft"
               >
                 <FolderOpen className="h-3 w-3" />
                 場所

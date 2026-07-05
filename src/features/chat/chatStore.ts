@@ -1,4 +1,4 @@
-import { create } from "zustand";
+﻿import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { realtimeClient } from "../realtime/realtimeClient";
 import type {
@@ -249,7 +249,7 @@ export const useChatStore = create<ChatStore>()(
         }),
       failMessage: (messageId, message, code = "send_failed") =>
         set((state) => failMessageState(state, messageId, message, code)),
-      markInterruptedTransfers: (message = "接続が中断されました。Retryで再送できます。") =>
+      markInterruptedTransfers: (message = "接続が中断されました。再接続後に再送できます。") =>
         set((state) => {
           const interruptedIds = state.messages
             .filter(

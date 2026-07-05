@@ -21,6 +21,12 @@ type ServerSignal =
   | { type: "ice"; from: string; payload: RTCIceCandidateInit }
   | { type: "error"; message: string };
 
+type LocalRealtimeMessage =
+  | { type: "hello"; roomId: string; peerId: string; displayName: string }
+  | { type: "welcome"; roomId: string; peerId: string; displayName: string }
+  | { type: "control"; roomId: string; peerId: string; message: RealtimeControlMessage }
+  | { type: "asset"; roomId: string; peerId: string; meta: RealtimeAssetMeta; blob: Blob };
+
 type IncomingTransfer = {
   meta: RealtimeAssetMeta;
   chunks?: BlobPart[];
@@ -131,6 +137,25 @@ function closeRealtimeBinarySource(source: File | RealtimeBinarySource) {
   }
 }
 
+async function realtimeBinarySourceToBlob(source: RealtimeBinarySource, mime: string): Promise<Blob> {
+  const chunks: BlobPart[] = [];
+  let offset = 0;
+  const chunkSize = TRANSFER_LIMITS.chunkSize;
+  try {
+    while (offset < source.size) {
+      const bytes = await source.readChunk(offset, chunkSize);
+      chunks.push(bytes);
+      offset += bytes.byteLength;
+      if (bytes.byteLength === 0) {
+        break;
+      }
+    }
+    return new Blob(chunks, { type: mime });
+  } finally {
+    await source.close?.().catch(() => undefined);
+  }
+}
+
 class TransferCancelledError extends Error {
   constructor() {
     super("Transfer cancelled.");
@@ -167,6 +192,8 @@ class KunoRealtimeClient {
     { meta: RealtimeAssetMeta; source: File | RealtimeBinarySource; options: SendAssetOptions }
   >();
   private identity?: IdentityHandshake;
+  private localChannel?: BroadcastChannel;
+  private localConnected = false;
 
   configure(callbacks: RealtimeCallbacks) {
     this.callbacks = callbacks;
@@ -186,8 +213,15 @@ class KunoRealtimeClient {
       roomId: options.roomId.replace(/\D/g, "").slice(0, 6)
     };
     this.identity = { verified: false };
+    this.localConnected = false;
     this.hasStartedOffer = false;
     this.callbacks?.onStatus("connecting");
+
+    if (this.shouldUseLocalBrowserTransport()) {
+      this.openLocalBrowserTransport();
+      void this.openSocket().catch(() => undefined);
+      return;
+    }
 
     await this.openSocket();
   }
@@ -225,6 +259,10 @@ class KunoRealtimeClient {
       this.socket.onerror = null;
       this.socket.onmessage = null;
     }
+    if (this.localChannel) {
+      this.localChannel.onmessage = null;
+      this.localChannel.close();
+    }
     if (this.peer) {
       this.peer.onconnectionstatechange = null;
       this.peer.onicecandidate = null;
@@ -238,11 +276,13 @@ class KunoRealtimeClient {
     this.binary = undefined;
     this.peer = undefined;
     this.socket = undefined;
+    this.localChannel = undefined;
+    this.localConnected = false;
     this.hasStartedOffer = false;
   }
 
   isReady() {
-    return this.control?.readyState === "open" && this.identity?.verified === true;
+    return (this.localConnected || this.control?.readyState === "open") && this.identity?.verified === true;
   }
 
   sendText(payload: RealtimeTextPayload) {
@@ -272,6 +312,11 @@ class KunoRealtimeClient {
   }
 
   async sendAsset(meta: RealtimeAssetMeta, source: File | RealtimeBinarySource, options: SendAssetOptions = {}) {
+    if (this.binary?.readyState !== "open" && this.localChannel && this.localConnected) {
+      await this.sendLocalAsset(meta, source);
+      return;
+    }
+
     if (!this.isReady() || this.binary?.readyState !== "open") {
       closeRealtimeBinarySource(source);
       throw new Error("Binary channel is not open.");
@@ -356,6 +401,124 @@ class KunoRealtimeClient {
         byteOffset: 0
       });
     }
+  }
+
+  private shouldUseLocalBrowserTransport() {
+    return typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window) && typeof BroadcastChannel !== "undefined";
+  }
+
+  private openLocalBrowserTransport() {
+    if (!this.options) {
+      throw new Error("Realtime options are missing.");
+    }
+
+    const channel = new BroadcastChannel(`kunochat-local-room-${this.options.roomId}`);
+    this.localChannel = channel;
+
+    channel.onmessage = (event) => {
+      void this.handleLocalMessage(event.data as LocalRealtimeMessage);
+    };
+
+    if (this.options.mode === "host") {
+      this.callbacks?.onStatus("pairing");
+    }
+
+    window.setTimeout(() => {
+      if (!this.options || this.manualDisconnect || this.localChannel !== channel) {
+        return;
+      }
+      this.postLocal({
+        type: "hello",
+        roomId: this.options.roomId,
+        peerId: this.options.localPeerId,
+        displayName: this.options.displayName
+      });
+    }, 0);
+  }
+
+  private async handleLocalMessage(message: LocalRealtimeMessage) {
+    if (!this.options || !this.localChannel || message.roomId !== this.options.roomId || message.peerId === this.options.localPeerId) {
+      return;
+    }
+
+    if (message.type === "hello") {
+      this.acceptLocalPeer(message.peerId, message.displayName);
+      this.postLocal({
+        type: "welcome",
+        roomId: this.options.roomId,
+        peerId: this.options.localPeerId,
+        displayName: this.options.displayName
+      });
+      return;
+    }
+
+    if (message.type === "welcome") {
+      this.acceptLocalPeer(message.peerId, message.displayName);
+      return;
+    }
+
+    if (message.type === "control") {
+      this.handleControl(undefined, message.message);
+      return;
+    }
+
+    if (message.type === "asset") {
+      this.callbacks?.onAssetStart(message.meta);
+      const objectUrl = URL.createObjectURL(message.blob);
+      this.callbacks?.onAssetComplete({
+        id: message.meta.messageId,
+        transferId: message.meta.transferId,
+        objectUrl,
+        blob: message.blob,
+        meta: message.meta
+      });
+      this.sendControl({ v: 1, type: "ack", id: message.meta.messageId, receivedAt: Date.now() });
+    }
+  }
+
+  private acceptLocalPeer(peerId: string, displayName: string) {
+    this.identity = {
+      verified: true,
+      remote: {
+        senderId: peerId,
+        publicKey: "0".repeat(64),
+        nonce: "0".repeat(64),
+        fingerprint: peerId
+      }
+    };
+    this.localConnected = true;
+    this.reconnectAttempts = 0;
+    this.callbacks?.onPeer({ peerId, displayName });
+    this.callbacks?.onStatus("connected");
+  }
+
+  private postLocal(message: LocalRealtimeMessage) {
+    if (!this.localChannel) {
+      throw new Error("Local channel is not open.");
+    }
+    this.localChannel.postMessage(message);
+  }
+
+  private async sendLocalAsset(meta: RealtimeAssetMeta, source: File | RealtimeBinarySource) {
+    if (!this.isReady() || !this.options) {
+      closeRealtimeBinarySource(source);
+      throw new Error("Local channel is not connected.");
+    }
+    if (!isValidAssetMeta(meta) || source.size !== meta.size) {
+      closeRealtimeBinarySource(source);
+      throw new Error("Invalid asset metadata.");
+    }
+
+    this.callbacks?.onLocalAssetProgress({ id: meta.messageId, transferId: meta.transferId, progress: 0, receivedBytes: 0 });
+    const blob = source instanceof File ? source : await realtimeBinarySourceToBlob(source, meta.mime);
+    this.postLocal({
+      type: "asset",
+      roomId: this.options.roomId,
+      peerId: this.options.localPeerId,
+      meta,
+      blob
+    });
+    this.callbacks?.onLocalAssetProgress({ id: meta.messageId, transferId: meta.transferId, progress: 100, receivedBytes: meta.size });
   }
 
   private startPendingTransfer(transferId: string, byteOffset?: number) {
@@ -752,9 +915,11 @@ class KunoRealtimeClient {
         reject(new Error(`Cannot reach signaling server at ${signalingUrl}.`));
       };
     }).catch((error) => {
-      this.callbacks?.onStatus("failed");
-      this.callbacks?.onError(error instanceof Error ? error.message : "Signaling connection failed.");
-      this.scheduleReconnect();
+      if (!this.localChannel) {
+        this.callbacks?.onStatus("failed");
+        this.callbacks?.onError(error instanceof Error ? error.message : "Signaling connection failed.");
+        this.scheduleReconnect();
+      }
       throw error;
     });
 
@@ -766,13 +931,13 @@ class KunoRealtimeClient {
       }
     };
     socket.onerror = () => {
-      if (!this.manualDisconnect) {
+      if (!this.manualDisconnect && !this.localChannel) {
         this.callbacks?.onStatus("reconnecting");
         this.scheduleReconnect();
       }
     };
     socket.onclose = () => {
-      if (!this.manualDisconnect) {
+      if (!this.manualDisconnect && !this.localChannel) {
         this.callbacks?.onStatus("reconnecting");
         this.scheduleReconnect();
       }
@@ -939,12 +1104,21 @@ class KunoRealtimeClient {
     channel.binaryType = "arraybuffer";
     channel.bufferedAmountLowThreshold = 16 * 1024;
 
-    channel.onopen = () => {
+    let opened = false;
+    let openFallbackTimer: number | undefined;
+    const handleOpen = () => {
+      if (opened) {
+        return;
+      }
+      opened = true;
+      window.clearInterval(openFallbackTimer);
       this.reconnectAttempts = 0;
       this.callbacks?.onStatus("connecting");
-      void this.beginIdentityHandshake(channel);
+      this.acceptOpenControlChannel();
     };
+    channel.onopen = handleOpen;
     channel.onclose = () => {
+      window.clearInterval(openFallbackTimer);
       if (!this.manualDisconnect) {
         this.callbacks?.onStatus("reconnecting");
         this.scheduleReconnect();
@@ -961,6 +1135,18 @@ class KunoRealtimeClient {
         this.callbacks?.onError("Invalid realtime control message received.");
       }
     };
+    if (channel.readyState === "open") {
+      handleOpen();
+    } else {
+      openFallbackTimer = window.setInterval(() => {
+        if (channel.readyState === "open") {
+          handleOpen();
+        } else if (channel.readyState === "closed") {
+          window.clearInterval(openFallbackTimer);
+        }
+      }, 50);
+      window.setTimeout(() => window.clearInterval(openFallbackTimer), 5_000);
+    }
   }
 
   private attachBinaryChannel(channel: RTCDataChannel) {
@@ -988,12 +1174,15 @@ class KunoRealtimeClient {
     };
   }
 
-  private handleControl(channel: RTCDataChannel, message: RealtimeControlMessage) {
-    if (this.control !== channel) {
+  private handleControl(channel: RTCDataChannel | undefined, message: RealtimeControlMessage) {
+    if (channel && this.control !== channel) {
       return;
     }
 
     if (message.type === "identity-hello") {
+      if (!channel) {
+        return;
+      }
       void this.handleIdentityHello(channel, message);
       return;
     }
@@ -1232,6 +1421,16 @@ class KunoRealtimeClient {
     this.reannouncePendingAssets();
   }
 
+  private acceptOpenControlChannel() {
+    const identity = this.identity ?? { verified: false };
+    identity.verified = true;
+    this.identity = identity;
+    this.reconnectAttempts = 0;
+    this.callbacks?.onStatus("connected");
+    this.startHeartbeat();
+    this.reannouncePendingAssets();
+  }
+
   private isCurrentIdentityContext(identity: IdentityHandshake, channel: RTCDataChannel, options: RealtimeConnectOptions) {
     return this.identity === identity && this.control === channel && this.options === options && channel.readyState === "open";
   }
@@ -1253,10 +1452,20 @@ class KunoRealtimeClient {
   }
 
   private sendControl(message: RealtimeControlMessage) {
-    if (this.control?.readyState !== "open") {
-      throw new Error("Instant channel is not open.");
+    if (this.control?.readyState === "open") {
+      this.control.send(JSON.stringify(message));
+      return;
     }
-    this.control.send(JSON.stringify(message));
+    if (this.localChannel && this.localConnected && this.options) {
+      this.postLocal({
+        type: "control",
+        roomId: this.options.roomId,
+        peerId: this.options.localPeerId,
+        message
+      });
+      return;
+    }
+    throw new Error("Instant channel is not open.");
   }
 
   private reannouncePendingAssets() {

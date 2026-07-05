@@ -46,7 +46,8 @@ export function PairingScreen({
   const [friendCode, setFriendCode] = useState("");
   const [copied, setCopied] = useState(false);
   const canConnect = friendCode.replace(/\D/g, "").length === 6;
-  const isSearching = status === "connecting" && !canConnect;
+  const isConnecting = status === "connecting" || status === "reconnecting";
+  const canSubmitCode = canConnect && !isConnecting;
   const isConnected = status === "connected";
   const hasFailed = status === "failed";
 
@@ -58,7 +59,7 @@ export function PairingScreen({
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (canConnect) {
+    if (canSubmitCode) {
       onConnect(friendCode);
     }
   }
@@ -78,7 +79,7 @@ export function PairingScreen({
         </button>
         <div className="flex min-w-0 flex-1 items-center gap-2 px-2">
           <BrandMark className="h-5 w-5" />
-          <div className="truncate text-[13px] font-semibold text-text">Pair a device</div>
+          <div className="truncate text-[13px] font-semibold text-text">接続先を選ぶ</div>
         </div>
         <PairingStatus status={status} />
       </header>
@@ -93,17 +94,17 @@ export function PairingScreen({
               <h1 className="text-[17px] font-semibold text-text">{isConnected ? "接続済み" : hasFailed ? "接続できませんでした" : "2台のKunoChatを接続"}</h1>
               <p className="mt-1 text-[12px] leading-5 text-muted">
                 {isConnected
-                  ? `${peerDisplayName || "相手"} と認証済みです。すぐに送信できます。`
+                  ? `${peerDisplayName || "相手"} と接続済みです。すぐに送信できます。`
                   : hasFailed
                     ? "相手PCが起動していることと、同じネットワークにいることを確認してください。"
-                    : "同じWi-Fiでは自動接続を試みます。必要なときだけコードを使います。"}
+                    : "相手を選ぶだけで接続します。見つからない時だけコードを使います。"}
               </p>
             </div>
           </div>
 
           <section className="mt-7 border-y border-border py-4" aria-labelledby="your-code-label">
             <div id="your-code-label" className="text-[11px] font-semibold uppercase tracking-[0.08em] text-faint">
-              Your code
+              自分のコード
             </div>
             <div className="mt-2 flex items-center gap-3">
               <code className="min-w-0 flex-1 truncate font-mono text-[24px] font-semibold tracking-[0.16em] text-text">{pairingCode}</code>
@@ -126,7 +127,7 @@ export function PairingScreen({
 
           <section className="mt-6" aria-labelledby="detected-devices-label">
             <div id="detected-devices-label" className="text-[11px] font-semibold uppercase tracking-[0.08em] text-faint">
-              Detected devices
+              見つかった相手
             </div>
             <div className="mt-2 space-y-2">
               {detectedPeers.length > 0 ? (
@@ -153,13 +154,13 @@ export function PairingScreen({
                           {peerPlatformLabel(peer.platform)} / {peer.source === "tailscale" ? "Tailscale" : "LAN"} / {peer.peerHint}
                         </span>
                       </span>
-                      <span className="shrink-0 text-[12px] font-semibold text-accent">{selected ? "Waiting" : "Request"}</span>
+                      <span className="shrink-0 text-[12px] font-semibold text-accent">{selected ? "接続中" : "接続"}</span>
                     </button>
                   );
                 })
               ) : (
                 <div className="rounded-input border border-dashed border-border px-3 py-3 text-[11px] leading-5 text-muted">
-                  No nearby devices yet.
+                  近くの相手はまだ見つかっていません。
                 </div>
               )}
             </div>
@@ -175,7 +176,6 @@ export function PairingScreen({
               onChange={(event) => setFriendCode(formatPairingCode(event.target.value))}
               placeholder="000-000"
               autoComplete="off"
-              autoFocus
               inputMode="numeric"
               maxLength={7}
               className="kuno-focus-ring mt-2 h-11 w-full rounded-input border border-border bg-surface px-3 font-mono text-[15px] tracking-[0.14em] text-text outline-none transition-colors placeholder:text-faint focus:border-accent focus:shadow-[0_0_0_3px_var(--accent-soft)]"
@@ -183,16 +183,16 @@ export function PairingScreen({
             <button
               type="submit"
               id="pairing-connect-btn"
-              disabled={!canConnect}
+              disabled={!canSubmitCode}
               className="kuno-focus-ring mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-input bg-accent px-4 text-[13px] font-semibold text-white transition-colors enabled:hover:bg-accent-hover enabled:active:scale-[0.99] disabled:bg-surface-active disabled:text-faint"
             >
-              {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {isSearching ? "探索中" : "Connect"}
+              {isConnecting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {isConnecting ? "接続中" : "接続"}
             </button>
           </form>
 
           <p className="mt-4 text-[11px] leading-5 text-muted">{pairingHelpText(status, signalingConfigured, signalingUrl)}</p>
-          <p className="mt-2 text-[11px] leading-5 text-faint">このPCは接続後に相手デバイスを記憶し、別の鍵を持つ端末は遮断します。</p>
+          <p className="mt-2 text-[11px] leading-5 text-faint">一度接続した相手はチャット一覧に残ります。次回からは相手を選ぶだけで送信できます。</p>
         </div>
       </div>
     </div>
@@ -206,7 +206,7 @@ function PairingStatus({ status }: { status: ConnectionStatus }) {
   return (
     <span className={clsx("inline-flex items-center gap-1.5 text-[11px] font-medium", connected ? "text-success" : failed ? "text-danger" : "text-muted")}>
       {connected ? <Wifi className="h-3.5 w-3.5" /> : connecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <WifiOff className="h-3.5 w-3.5" />}
-      {connected ? "Connected" : connecting ? "Connecting" : failed ? "Failed" : "Waiting"}
+      {connected ? "接続済み" : connecting ? "接続中" : failed ? "失敗" : "待機中"}
     </span>
   );
 }
@@ -220,13 +220,14 @@ function peerPlatformLabel(platform: string | undefined): string {
   if (platform === "windows") return "Windows";
   if (platform === "macos") return "Mac";
   if (platform === "linux") return "Linux";
-  return "Unknown OS";
+  if (platform === "browser") return "ブラウザ";
+  return "不明";
 }
 
 function pairingHelpText(status: ConnectionStatus, signalingConfigured: boolean, _signalingUrl: string): string {
   if (!signalingConfigured) return "接続サービスを初期化できませんでした。アプリを再起動してください。";
   if (status === "connected") return "接続の準備が完了しました。";
   if (status === "failed") return "接続できませんでした。同じネットワークか、相手PCのKunoChatが開いているか確認してください。";
-  if (status === "connecting") return "相手PCの応答とデバイス認証を確認しています。";
+  if (status === "connecting" || status === "reconnecting") return "相手PCへ接続しています。時間がかかる場合は接続先を選び直してください。";
   return "相手のコードを入力すると、直接接続を開始します。";
 }

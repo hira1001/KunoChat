@@ -174,7 +174,7 @@ function ActionButton({ id, label, icon, text, onClick, variant }: ActionButtonP
       title={label}
       onClick={onClick}
       className={clsx(
-        "kuno-focus-ring ml-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-pill border bg-surface px-2 text-[10px] font-semibold shadow-card transition-all duration-150 active:scale-95",
+        "kuno-focus-ring ml-1 inline-flex h-8 shrink-0 items-center gap-1 rounded-pill border bg-surface px-2.5 text-[11px] font-semibold shadow-card transition-all duration-150 active:scale-95",
         variantClass
       )}
     >
@@ -212,7 +212,7 @@ function MessageStatusIcon({ message }: { message: ChatMessage }) {
     return (
       <span className="inline-flex items-center gap-0.5 text-danger">
         <TriangleAlert className="h-3 w-3" />
-        Failed
+        失敗
       </span>
     );
   }
@@ -220,7 +220,7 @@ function MessageStatusIcon({ message }: { message: ChatMessage }) {
     return (
       <span className="inline-flex items-center gap-0.5 text-faint">
         <CircleX className="h-3 w-3" />
-        Cancelled
+        取消済み
       </span>
     );
   }

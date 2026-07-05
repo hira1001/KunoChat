@@ -30,6 +30,9 @@ type AutoConnectPayload = {
   platform?: string;
 };
 
+const LOCAL_BROWSER_SIGNALING_URL = "browser-local";
+const CONNECTION_ATTEMPT_TIMEOUT_MS = 16_000;
+
 export type DetectedPeer = AutoConnectPayload & {
   id: string;
   lastSeen: number;
@@ -139,6 +142,7 @@ export function App() {
   const incomingRequestsRef = useRef(new Set<string>());
   const pendingDeliveryIdsRef = useRef(new Set<string>());
   const typingStopTimerRef = useRef<number>();
+  const connectionTimeoutRef = useRef<number>();
   const settingsRef = useRef(settings);
   const windowFocusedRef = useRef(typeof document === "undefined" ? true : document.hasFocus());
   const unreadEpochRef = useRef(0);
@@ -279,7 +283,7 @@ export function App() {
             detail: "相手PCまたはネットワークが一時的に途切れています。"
           });
         } else if (status === "offline") {
-          markInterruptedTransfers("相手がオフラインです。再接続後にRetryで再送できます。");
+          markInterruptedTransfers("相手がオフラインです。再接続後に再送できます。");
           setDiagnostic({
             tone: "warning",
             title: "相手がオフラインです",
@@ -328,7 +332,7 @@ export function App() {
           isFolder: asset.isFolder
         });
         if (isNewMessage) {
-          void notifyIncoming(`${asset.senderName} sent a file`, asset.name);
+          void notifyIncoming(`${asset.senderName} がファイルを送信しました`, asset.name);
         }
         if (!incomingRequestsRef.current.has(asset.transferId)) {
           incomingRequestsRef.current.add(asset.transferId);
@@ -394,8 +398,32 @@ export function App() {
     return () => {
       realtimeClient.disconnect();
       window.clearTimeout(typingStopTimerRef.current);
+      window.clearTimeout(connectionTimeoutRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    window.clearTimeout(connectionTimeoutRef.current);
+    if (connectionStatus !== "connecting" && connectionStatus !== "reconnecting") {
+      return;
+    }
+
+    connectionTimeoutRef.current = window.setTimeout(() => {
+      const latestStatus = useChatStore.getState().connectionStatus;
+      if (latestStatus !== "connecting" && latestStatus !== "reconnecting") {
+        return;
+      }
+      setConnectionStatus("failed");
+      markInterruptedTransfers("接続が時間切れになりました。相手を選び直すか、もう一度接続してください。");
+      setDiagnostic({
+        tone: "danger",
+        title: "接続が完了しません",
+        detail: "相手PCが見つからないか、接続の応答がありません。接続先を選び直してください。"
+      });
+    }, CONNECTION_ATTEMPT_TIMEOUT_MS);
+
+    return () => window.clearTimeout(connectionTimeoutRef.current);
+  }, [connectionStatus, markInterruptedTransfers, setConnectionStatus]);
 
   useEffect(() => {
     let disposed = false;
@@ -446,6 +474,56 @@ export function App() {
       trustedPeer: trustedPeerForActiveConversation()
     }).catch(() => undefined);
   }, [currentView, connectionStatus, pairingCode, settings.displayName, settings.localPeerId]);
+
+  useEffect(() => {
+    if ("__TAURI_INTERNALS__" in window || typeof BroadcastChannel === "undefined" || currentView !== "pairing") {
+      return;
+    }
+
+    const sessionPeerId = sessionPeerIdRef.current;
+    if (!sessionPeerId) {
+      return;
+    }
+
+    const channel = new BroadcastChannel("kunochat-browser-discovery");
+    const announce = () => {
+      channel.postMessage({
+        type: "announce",
+        peerId: sessionPeerId,
+        displayName: settings.displayName || "ブラウザ",
+        roomId: pairingCode,
+        platform: "browser"
+      });
+      setDetectedPeers((peers) => peers.filter((peer) => Date.now() - peer.lastSeen < 10_000));
+    };
+
+    channel.onmessage = (event) => {
+      const message = event.data as { type?: string; peerId?: string; displayName?: string; roomId?: string; platform?: string };
+      if (message.type !== "announce" || !message.peerId || !message.roomId || message.peerId === sessionPeerId) {
+        return;
+      }
+      const remotePeerId = message.peerId;
+      const remoteRoomId = message.roomId;
+      setDetectedPeers((peers) =>
+        upsertDetectedPeer(peers, {
+          signalingUrl: LOCAL_BROWSER_SIGNALING_URL,
+          roomId: remoteRoomId,
+          mode: "join",
+          peerHint: remotePeerId,
+          source: "lan",
+          deviceName: message.displayName || "ブラウザ",
+          platform: message.platform || "browser"
+        })
+      );
+    };
+
+    announce();
+    const interval = window.setInterval(announce, 1500);
+    return () => {
+      window.clearInterval(interval);
+      channel.close();
+    };
+  }, [currentView, pairingCode, settings.displayName]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) {
@@ -573,7 +651,8 @@ export function App() {
         size: file.size,
         mime: file.mime,
         localPath: file.localPath,
-        previewUrl: file.previewUrl
+        previewUrl: file.previewUrl,
+        file: file.file
       }))
     );
   }
@@ -754,7 +833,12 @@ export function App() {
       realtimeClient.disconnect();
     }
     const selectedPeer = lastAutoConnect;
-    const detectedPeerUrl = selectedPeer?.peerHint ? signalingUrlForPeer(selectedPeer.peerHint) : undefined;
+    const detectedPeerUrl =
+      selectedPeer?.signalingUrl === LOCAL_BROWSER_SIGNALING_URL
+        ? LOCAL_BROWSER_SIGNALING_URL
+        : selectedPeer?.peerHint
+          ? signalingUrlForPeer(selectedPeer.peerHint)
+          : undefined;
     if (selectedPeer) {
       activateConversation({
         peerId: selectedPeer.peerHint,
@@ -777,7 +861,7 @@ export function App() {
       displayName: settings.displayName || "You",
       mode: "join",
       signalingUrl: detectedPeerUrl,
-      nativeEndpoint: selectedPeer?.peerHint ? nativeEndpointForPeer(selectedPeer.peerHint) : undefined,
+      nativeEndpoint: selectedPeer?.signalingUrl === LOCAL_BROWSER_SIGNALING_URL || !selectedPeer?.peerHint ? undefined : nativeEndpointForPeer(selectedPeer.peerHint),
       trustedPeer: trustedPeerForActiveConversation()
     }).catch(() => undefined);
   }
@@ -787,7 +871,8 @@ export function App() {
     if (!sessionPeerId) {
       return;
     }
-    const roomId = createPairingCode();
+    const isLocalBrowserPeer = peer.signalingUrl === LOCAL_BROWSER_SIGNALING_URL;
+    const roomId = isLocalBrowserPeer ? peer.roomId : createPairingCode();
     const signalingUrl = signalingUrlForPeer(peer.peerHint) ?? peer.signalingUrl;
     const requestId = crypto.randomUUID();
     const requestPeer = {
@@ -815,6 +900,24 @@ export function App() {
       detail: `${peer.deviceName || peer.peerHint} に接続依頼を送っています。`
     });
     setView("main");
+
+    if (isLocalBrowserPeer) {
+      setLastAutoConnect(requestPeer);
+      setDiagnostic({
+        tone: "info",
+        title: "接続中",
+        detail: `${peer.deviceName || "相手"} に接続しています。`
+      });
+      void realtimeClient.connect({
+        roomId,
+        localPeerId: sessionPeerId,
+        displayName: settings.displayName || "You",
+        mode: "join",
+        signalingUrl,
+        trustedPeer: trustedPeerForConversation(useChatStore.getState().activeConversationId)
+      }).catch(() => undefined);
+      return;
+    }
 
     try {
       await sendConnectionRequest(signalingUrl, {
@@ -1487,11 +1590,11 @@ function ConnectionRequestBanner({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <button type="button" onClick={onDecline} className="kuno-focus-ring rounded-input bg-white/80 px-2.5 py-1 text-[11px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
-            Decline
+          <button type="button" onClick={onDecline} className="kuno-focus-ring min-h-8 rounded-input bg-white/80 px-3 py-1.5 text-[12px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
+            閉じる
           </button>
-          <button type="button" onClick={onAccept} className="kuno-focus-ring rounded-input bg-accent px-2.5 py-1 text-[11px] font-semibold text-white shadow-sm transition-colors hover:bg-accent-hover">
-            Connect
+          <button type="button" onClick={onAccept} className="kuno-focus-ring min-h-8 rounded-input bg-accent px-3 py-1.5 text-[12px] font-semibold text-white shadow-sm transition-colors hover:bg-accent-hover">
+            接続
           </button>
         </div>
       </div>
@@ -1530,10 +1633,10 @@ function ConnectionBanner({
           <div className="mt-0.5 break-words text-[11px] leading-4 opacity-90">{activeDiagnostic.detail}</div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <button type="button" onClick={onRetry} className="kuno-focus-ring rounded-input bg-white/80 px-2.5 py-1 text-[11px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
+          <button type="button" onClick={onRetry} className="kuno-focus-ring min-h-8 rounded-input bg-white/80 px-3 py-1.5 text-[12px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
             再接続
           </button>
-          <button type="button" onClick={onPair} className="kuno-focus-ring rounded-input bg-white/80 px-2.5 py-1 text-[11px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
+          <button type="button" onClick={onPair} className="kuno-focus-ring min-h-8 rounded-input bg-white/80 px-3 py-1.5 text-[12px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
             接続先を選ぶ
           </button>
         </div>

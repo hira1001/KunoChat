@@ -142,9 +142,17 @@ export const useChatStore = create<ChatStore>()(
       setConnectionStatus: (connectionStatus) =>
         set((state) => ({
           connectionStatus,
-          conversations: state.conversations.map((conversation) =>
-            conversation.id === state.activeConversationId ? { ...conversation, connectionStatus } : conversation
-          )
+          conversations: state.conversations.map((conversation) => {
+            if (conversation.id === state.activeConversationId) {
+              return { ...conversation, connectionStatus };
+            }
+            if (connectionStatus === "connected" || connectionStatus === "connecting" || connectionStatus === "reconnecting") {
+              return conversation.connectionStatus === "connected" || conversation.connectionStatus === "connecting" || conversation.connectionStatus === "reconnecting"
+                ? { ...conversation, connectionStatus: "pairing" }
+                : conversation;
+            }
+            return conversation;
+          })
         })),
       selectConversation: (conversationId) =>
         set((state) => {

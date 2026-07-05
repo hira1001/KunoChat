@@ -85,7 +85,7 @@ export function Composer({
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
           onBlur={onBlur}
-          placeholder={disabled ? "まずペアリングしてください..." : queuesOffline ? "オフラインでも送信待ちにできます" : "メッセージを入力..."}
+          placeholder={disabled ? "まずはペアリングしてください..." : queuesOffline ? "オフラインでも送信待ちにできます" : "メッセージを入力..."}
           disabled={disabled}
           rows={1}
           aria-keyshortcuts="Enter"

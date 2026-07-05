@@ -141,6 +141,8 @@ export function App() {
   const recoverySessionsRef = useRef<DurableTransferSession[]>([]);
   const incomingRequestsRef = useRef(new Set<string>());
   const pendingDeliveryIdsRef = useRef(new Set<string>());
+  const autoConnectInFlightRef = useRef<string>();
+  const autoConnectAttemptAtRef = useRef(new Map<string, number>());
   const typingStopTimerRef = useRef<number>();
   const connectionTimeoutRef = useRef<number>();
   const settingsRef = useRef(settings);
@@ -243,6 +245,9 @@ export function App() {
   useEffect(() => {
     const recoverConnection = () => {
       const status = useChatStore.getState().connectionStatus;
+      if (ensureActiveConversationConnection("resume")) {
+        return;
+      }
       if (status !== "connected" && lastAutoConnect) {
         handleRetryAutoConnect();
       }
@@ -261,6 +266,12 @@ export function App() {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [lastAutoConnect]);
+
+  useEffect(() => {
+    if (currentView === "main") {
+      ensureActiveConversationConnection("open");
+    }
+  }, [currentView, activeConversationId, connectionStatus, conversations]);
 
   useEffect(() => {
     realtimeClient.configure({
@@ -293,10 +304,14 @@ export function App() {
       },
       onPeer: (peer) => {
         updateSettings({ peerDisplayName: peer.displayName });
-        activateConversation({
-          peerId: peer.peerId,
-          displayName: peer.displayName
-        });
+        const state = useChatStore.getState();
+        const active = state.conversations.find((conversation) => conversation.id === state.activeConversationId);
+        if (!active || (active.id === DEFAULT_CONVERSATION_ID && !active.peerHint)) {
+          activateConversation({
+            peerId: peer.peerId,
+            displayName: peer.displayName
+          });
+        }
       },
       onIdentity: (identity) => {
         if (identity.status === "mismatch") {
@@ -750,6 +765,33 @@ export function App() {
     return state.conversations.find((conversation) => conversation.id === conversationId)?.trustedPeer ?? state.settings.trustedPeer;
   }
 
+  function ensureActiveConversationConnection(reason: "open" | "resume" | "select" | "send", force = false): boolean {
+    const state = useChatStore.getState();
+    if (state.connectionStatus === "connected" || state.connectionStatus === "connecting" || state.connectionStatus === "reconnecting") {
+      return false;
+    }
+
+    const conversation = state.conversations.find((candidate) => candidate.id === state.activeConversationId);
+    if (!conversation?.peerHint) {
+      return false;
+    }
+
+    const now = Date.now();
+    const lastAttemptAt = autoConnectAttemptAtRef.current.get(conversation.id) ?? 0;
+    if (!force && (autoConnectInFlightRef.current === conversation.id || now - lastAttemptAt < 8_000)) {
+      return true;
+    }
+
+    autoConnectInFlightRef.current = conversation.id;
+    autoConnectAttemptAtRef.current.set(conversation.id, now);
+    void reconnectConversation(conversation, { automatic: true, reason }).finally(() => {
+      if (autoConnectInFlightRef.current === conversation.id) {
+        autoConnectInFlightRef.current = undefined;
+      }
+    });
+    return true;
+  }
+
   async function attentionIsNeeded(): Promise<boolean> {
     const epoch = unreadEpochRef.current;
     const miniMode = useChatStore.getState().currentView === "mini";
@@ -992,25 +1034,30 @@ export function App() {
 
   function handleSelectConversation(conversationId: string) {
     const previousConversationId = useChatStore.getState().activeConversationId;
-    const wasConnected = useChatStore.getState().connectionStatus === "connected";
+    const previousStatus = useChatStore.getState().connectionStatus;
+    const hadActiveConnection =
+      previousStatus === "connected" || previousStatus === "connecting" || previousStatus === "reconnecting";
     selectConversation(conversationId);
 
     const conversation = useChatStore.getState().conversations.find((candidate) => candidate.id === conversationId);
-    if (!conversation || conversationId === previousConversationId) {
+    if (!conversation) {
       return;
     }
 
-    if (wasConnected) {
+    if (conversationId !== previousConversationId && hadActiveConnection) {
       realtimeClient.disconnect();
       setConnectionStatus("pairing");
     }
 
     if (conversation.peerHint) {
-      void reconnectConversation(conversation);
+      ensureActiveConversationConnection("select", true);
     }
   }
 
-  async function reconnectConversation(conversation: ConversationSummary) {
+  async function reconnectConversation(
+    conversation: ConversationSummary,
+    options: { automatic?: boolean; reason?: "open" | "resume" | "select" | "send" } = {}
+  ) {
     const sessionPeerId = sessionPeerIdRef.current;
     if (!sessionPeerId || !conversation.peerHint) {
       return;
@@ -1032,8 +1079,8 @@ export function App() {
     setConnectionStatus("connecting");
     setDiagnostic({
       tone: "info",
-      title: "接続中",
-      detail: `${conversation.displayName} に接続しています。未送信のメッセージは接続後に自動送信されます。`
+      title: options.automatic ? "自動接続中" : "接続中",
+      detail: `${conversation.displayName} が同じチャットを開いていればオンラインになります。未送信のメッセージは接続後に自動送信されます。`
     });
 
     try {
@@ -1053,14 +1100,14 @@ export function App() {
         trustedPeer: trustedPeerForConversation(conversation.id)
       });
     } catch (error) {
-      setConnectionStatus("failed");
+      setConnectionStatus(options.automatic ? "offline" : "failed");
       setDiagnostic({
         tone: "warning",
-        title: "未接続",
+        title: options.automatic ? "オフライン" : "未接続",
         detail:
-          error instanceof Error
+          !options.automatic && error instanceof Error
             ? error.message
-            : "相手がオンラインになったら再接続して、未送信のメッセージを送信します。"
+            : "このチャットを開いている間は自動で接続を試します。相手がKunoChatで同じチャットを開くとオンラインになります。"
       });
     }
   }
@@ -1170,10 +1217,7 @@ export function App() {
       return;
     }
 
-    const conversation = state.conversations.find((candidate) => candidate.id === state.activeConversationId);
-    if (conversation?.peerHint) {
-      void reconnectConversation(conversation);
-    }
+    ensureActiveConversationConnection("send", true);
   }
 
   async function handleRetryMessage(messageId: string) {
@@ -1304,6 +1348,8 @@ export function App() {
             diagnostic={diagnostic}
             status={connectionStatus}
             canRetry={Boolean(lastAutoConnect)}
+            autoMode={Boolean(activeConversation?.peerHint)}
+            peerName={peerName}
             onPair={() => setView("pairing")}
             onRetry={handleRetryAutoConnect}
           />
@@ -1628,12 +1674,16 @@ function ConnectionBanner({
   diagnostic,
   status,
   canRetry,
+  autoMode,
+  peerName,
   onPair,
   onRetry
 }: {
   diagnostic?: ConnectionDiagnostic;
   status: ConnectionStatus;
   canRetry: boolean;
+  autoMode: boolean;
+  peerName: string;
   onPair: () => void;
   onRetry: () => void;
 }) {
@@ -1641,7 +1691,7 @@ function ConnectionBanner({
     return null;
   }
 
-  const activeDiagnostic = diagnostic ?? reconnectDiagnostic(status, canRetry);
+  const activeDiagnostic = diagnostic ?? reconnectDiagnostic(status, canRetry, autoMode, peerName);
   const toneClass =
     activeDiagnostic.tone === "danger"
       ? "border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-950/30 dark:text-red-200"
@@ -1657,13 +1707,13 @@ function ConnectionBanner({
           <div className="mt-0.5 break-words text-[11px] leading-4 opacity-90">{activeDiagnostic.detail}</div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          {canRetry ? (
+          {!autoMode && canRetry ? (
             <button type="button" onClick={onRetry} className="kuno-focus-ring min-h-8 rounded-input bg-white/80 px-3 py-1.5 text-[12px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
               前回の相手に再接続
             </button>
           ) : null}
           <button type="button" onClick={onPair} className="kuno-focus-ring min-h-8 rounded-input bg-white/80 px-3 py-1.5 text-[12px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
-            {canRetry ? "別の相手を選ぶ" : "接続先を選ぶ"}
+            {autoMode ? "接続先変更" : canRetry ? "別の相手を選ぶ" : "接続先を選ぶ"}
           </button>
         </div>
       </div>
@@ -1671,14 +1721,23 @@ function ConnectionBanner({
   );
 }
 
-function reconnectDiagnostic(status: ConnectionStatus, canRetry: boolean): ConnectionDiagnostic {
+function reconnectDiagnostic(status: ConnectionStatus, canRetry: boolean, autoMode: boolean, peerName: string): ConnectionDiagnostic {
+  if (autoMode && (status === "offline" || status === "failed" || status === "pairing")) {
+    return {
+      tone: "info",
+      title: "自動接続待機中",
+      detail: `${peerName} が同じチャットを開くとオンラインになります。メッセージは送信待ちに保存されます。`
+    };
+  }
   if (status === "connecting" || status === "reconnecting") {
     return {
       tone: "warning",
-      title: "再接続中",
-      detail: canRetry
-        ? "前回の接続先へ接続しています。別の相手に繋ぐ場合は「別の相手を選ぶ」を押してください。"
-        : "接続先を探しています。相手が表示されない場合は「接続先を選ぶ」を押してください。"
+      title: autoMode ? "自動接続中" : "接続中",
+      detail: autoMode
+        ? `${peerName} が同じチャットを開くのを待っています。`
+        : canRetry
+          ? "前回の接続先へ接続しています。切り替える場合は別の相手を選んでください。"
+          : "接続先を探しています。表示されない場合は接続先を選んでください。"
     };
   }
   if (status === "failed" || status === "offline") {
@@ -1686,8 +1745,8 @@ function reconnectDiagnostic(status: ConnectionStatus, canRetry: boolean): Conne
       tone: "warning",
       title: "接続が切れています",
       detail: canRetry
-        ? "同じ相手へ戻すなら「前回の相手に再接続」、別のPCへ繋ぐなら「別の相手を選ぶ」を押してください。"
-        : "接続したい相手を選んでください。相手がオフラインでもメッセージは送信待ちにできます。"
+        ? "同じ相手へ戻す場合は再接続、別のPCへつなぐ場合は別の相手を選んでください。"
+        : "接続したい相手を選んでください。オフラインでもメッセージは送信待ちにできます。"
     };
   }
   return {
@@ -1696,7 +1755,6 @@ function reconnectDiagnostic(status: ConnectionStatus, canRetry: boolean): Conne
     detail: "接続先を選ぶか、相手からの接続依頼を待ってください。"
   };
 }
-
 function createPairingCode(): string {
   const bytes = new Uint8Array(4);
   crypto.getRandomValues(bytes);

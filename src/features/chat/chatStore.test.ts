@@ -71,6 +71,29 @@ describe("chatStore", () => {
     expect(useChatStore.getState().connectionStatus).toBe("connected");
   });
 
+  test("keeps only the active conversation online", () => {
+    const firstConversationId = useChatStore.getState().activateConversation({
+      peerId: "peer_a",
+      peerHint: "192.168.1.20",
+      displayName: "Peer A",
+      source: "lan"
+    });
+    useChatStore.getState().setConnectionStatus("connected");
+
+    const secondConversationId = useChatStore.getState().activateConversation({
+      peerId: "peer_b",
+      peerHint: "192.168.1.21",
+      displayName: "Peer B",
+      source: "lan"
+    });
+    useChatStore.getState().setConnectionStatus("connected");
+
+    const first = useChatStore.getState().conversations.find((conversation) => conversation.id === firstConversationId);
+    const second = useChatStore.getState().conversations.find((conversation) => conversation.id === secondConversationId);
+    expect(first?.connectionStatus).toBe("pairing");
+    expect(second?.connectionStatus).toBe("connected");
+  });
+
   test("caps unread messages at 99 and clears them when opened", () => {
     for (let index = 0; index < 101; index += 1) {
       useChatStore.getState().incrementUnread();

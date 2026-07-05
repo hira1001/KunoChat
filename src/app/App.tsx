@@ -1181,6 +1181,12 @@ export function App() {
     return counts;
   }, [deliveryOutbox]);
   const pendingOutboxCount = Object.values(pendingByConversation).reduce((total, count) => total + count, 0);
+  const lastAutoConnectMatchesActive =
+    Boolean(lastAutoConnect && activeConversation?.peerHint && lastAutoConnect.peerHint === activeConversation.peerHint);
+  const hasKnownAutoRecipient = Boolean(activeConversation?.peerHint || activeConversation?.trustedPeer || lastAutoConnectMatchesActive);
+  const passiveAutoDiagnostic =
+    !diagnostic || diagnostic.title === "自動接続待機中" || diagnostic.title === "オフライン" || diagnostic.title === "未接続";
+  const showConnectionBanner = connectionStatus !== "connected" && (!hasKnownAutoRecipient || !passiveAutoDiagnostic);
 
   function handleDraftChange(value: string) {
     setDraftText(value);
@@ -1357,15 +1363,17 @@ export function App() {
             onAccept={handleAcceptConnectionRequest}
             onDecline={handleDeclineConnectionRequest}
           />
-          <ConnectionBanner
-            diagnostic={diagnostic}
-            status={connectionStatus}
-            canRetry={Boolean(lastAutoConnect)}
-            autoMode={Boolean(activeConversation?.peerHint || lastAutoConnect)}
-            peerName={peerName}
-            onPair={() => setView("pairing")}
-            onRetry={handleRetryAutoConnect}
-          />
+          {showConnectionBanner ? (
+            <ConnectionBanner
+              diagnostic={diagnostic}
+              status={connectionStatus}
+              canRetry={Boolean(lastAutoConnect)}
+              autoMode={Boolean(activeConversation?.peerHint || lastAutoConnect)}
+              peerName={peerName}
+              onPair={() => setView("pairing")}
+              onRetry={handleRetryAutoConnect}
+            />
+          ) : null}
           <MessageList
             messages={activeMessages}
             connectionStatus={connectionStatus}

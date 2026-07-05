@@ -62,12 +62,6 @@ export function Composer({
 
   return (
     <div className="w-full min-w-0 max-w-full shrink-0 overflow-hidden border-t border-border bg-bg-glass px-3 py-3 backdrop-blur-[20px]">
-      {queuesOffline && !disabled ? (
-        <div className="mb-2 flex min-h-6 items-center justify-between gap-2 rounded-input bg-surface px-2.5 py-1 text-[10px] text-muted">
-          <span className="min-w-0 truncate">オフライン送信: 相手が戻るまで送信待ちに保存します</span>
-          <span className="shrink-0 font-semibold text-accent">送信OK</span>
-        </div>
-      ) : null}
       <div
         className={clsx(
           "grid min-h-[44px] w-full min-w-0 max-w-full items-end gap-1.5 overflow-hidden rounded-input border bg-surface p-1.5 transition-all duration-200",
@@ -85,7 +79,7 @@ export function Composer({
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
           onBlur={onBlur}
-          placeholder={disabled ? "まずはペアリングしてください..." : queuesOffline ? "オフラインでも送信待ちにできます" : "メッセージを入力..."}
+          placeholder={disabled ? "まずはペアリングしてください..." : "メッセージを入力..."}
           disabled={disabled}
           rows={1}
           aria-keyshortcuts="Enter"

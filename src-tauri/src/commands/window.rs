@@ -3,7 +3,9 @@ use std::sync::Mutex;
 use tauri::UserAttentionType;
 use tauri::{App, AppHandle, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow};
 
+const MAIN_WINDOW_SIZE: PhysicalSize<u32> = PhysicalSize::new(360, 560);
 const MAIN_MINIMUM_SIZE: PhysicalSize<u32> = PhysicalSize::new(320, 420);
+const LEGACY_LARGE_MAIN_WINDOW_SIZE: PhysicalSize<u32> = PhysicalSize::new(420, 640);
 // This includes the native title bar. Keep enough client-area height for the
 // 44px pill plus a stable 4px inset on each side.
 const MINI_WINDOW_SIZE: PhysicalSize<u32> = PhysicalSize::new(212, 96);
@@ -138,6 +140,14 @@ pub async fn set_window_mode(
                 window
                     .set_position(previous_main.position)
                     .map_err(|error| error.to_string())?;
+            } else {
+                let current_size = window.inner_size().map_err(|error| error.to_string())?;
+                if current_size.width >= LEGACY_LARGE_MAIN_WINDOW_SIZE.width
+                    && current_size.height >= LEGACY_LARGE_MAIN_WINDOW_SIZE.height
+                {
+                    resize_window_content(&window, MAIN_WINDOW_SIZE)?;
+                    position_top_right_for_window(&window)?;
+                }
             }
             Ok(())
         }

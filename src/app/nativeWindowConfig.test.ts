@@ -16,12 +16,12 @@ describe("native window configuration", () => {
     expect(mainWindow.resizable).toBe(true);
   });
 
-  test("has a practical default width", () => {
-    expect(mainWindow.width).toBeGreaterThanOrEqual(420);
+  test("uses the compact default width", () => {
+    expect(mainWindow.width).toBe(360);
   });
 
-  test("has a practical default height", () => {
-    expect(mainWindow.height).toBeGreaterThanOrEqual(640);
+  test("uses the compact default height", () => {
+    expect(mainWindow.height).toBe(560);
   });
 
   test("keeps mobile-safe minimum width", () => {

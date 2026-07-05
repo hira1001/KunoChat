@@ -45,9 +45,10 @@ export function PairingScreen({
 }: PairingScreenProps) {
   const [friendCode, setFriendCode] = useState("");
   const [copied, setCopied] = useState(false);
+  const hasPeerTarget = detectedPeers.length > 0 || Boolean(selectedPeerId);
   const canConnect = friendCode.replace(/\D/g, "").length === 6;
   const isConnecting = status === "connecting" || status === "reconnecting";
-  const canSubmitCode = canConnect && !isConnecting;
+  const canSubmitCode = canConnect && hasPeerTarget && !isConnecting;
   const isConnected = status === "connected";
   const hasFailed = status === "failed";
 
@@ -96,8 +97,8 @@ export function PairingScreen({
                 {isConnected
                   ? `${peerDisplayName || "相手"} と接続済みです。すぐに送信できます。`
                   : hasFailed
-                    ? "相手PCが起動していることと、同じネットワークにいることを確認してください。"
-                    : "相手を選ぶだけで接続します。見つからない時だけコードを使います。"}
+                    ? "相手PCのKunoChatが起動していることと、同じネットワークにいることを確認してください。"
+                    : "見つかった相手を選ぶと接続します。コードは相手確認用です。"}
               </p>
             </div>
           </div>
@@ -140,9 +141,7 @@ export function PairingScreen({
                       onClick={() => onConnectDetectedPeer(peer)}
                       className={clsx(
                         "kuno-focus-ring flex min-h-14 w-full min-w-0 items-center gap-3 rounded-input border px-3 py-2 text-left transition-colors",
-                        selected
-                          ? "border-accent bg-accent-soft"
-                          : "border-border bg-surface hover:border-accent hover:bg-surface-hover"
+                        selected ? "border-accent bg-accent-soft" : "border-border bg-surface hover:border-accent hover:bg-surface-hover"
                       )}
                     >
                       <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent-soft text-accent">
@@ -160,7 +159,7 @@ export function PairingScreen({
                 })
               ) : (
                 <div className="rounded-input border border-dashed border-border px-3 py-3 text-[11px] leading-5 text-muted">
-                  近くの相手はまだ見つかっていません。
+                  近くの相手はまだ見つかっていません。相手PCでKunoChatを起動し、同じLANまたはTailscale上にいるか確認してください。
                 </div>
               )}
             </div>
@@ -191,7 +190,7 @@ export function PairingScreen({
             </button>
           </form>
 
-          <p className="mt-4 text-[11px] leading-5 text-muted">{pairingHelpText(status, signalingConfigured, signalingUrl)}</p>
+          <p className="mt-4 text-[11px] leading-5 text-muted">{pairingHelpText(status, signalingConfigured, hasPeerTarget, signalingUrl)}</p>
           <p className="mt-2 text-[11px] leading-5 text-faint">一度接続した相手はチャット一覧に残ります。次回からは相手を選ぶだけで送信できます。</p>
         </div>
       </div>
@@ -224,10 +223,11 @@ function peerPlatformLabel(platform: string | undefined): string {
   return "不明";
 }
 
-function pairingHelpText(status: ConnectionStatus, signalingConfigured: boolean, _signalingUrl: string): string {
+function pairingHelpText(status: ConnectionStatus, signalingConfigured: boolean, hasPeerTarget: boolean, _signalingUrl: string): string {
   if (!signalingConfigured) return "接続サービスを初期化できませんでした。アプリを再起動してください。";
   if (status === "connected") return "接続の準備が完了しました。";
   if (status === "failed") return "接続できませんでした。同じネットワークか、相手PCのKunoChatが開いているか確認してください。";
+  if (!hasPeerTarget) return "6桁コードだけでは相手PCを特定できません。まず相手PCが見つかった相手に表示されるのを待ってください。";
   if (status === "connecting" || status === "reconnecting") return "相手PCへ接続しています。時間がかかる場合は接続先を選び直してください。";
-  return "相手のコードを入力すると、直接接続を開始します。";
+  return "相手を選ぶか、見つかった相手がある状態でコードを入力してください。";
 }

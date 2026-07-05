@@ -832,7 +832,17 @@ export function App() {
     if (useChatStore.getState().connectionStatus === "connected") {
       realtimeClient.disconnect();
     }
-    const selectedPeer = lastAutoConnect;
+    const selectedPeer = lastAutoConnect ?? detectedPeers[0];
+    if (!selectedPeer || selectedPeer.signalingUrl === LOCAL_BROWSER_SIGNALING_URL) {
+      setConnectionStatus("failed");
+      setDiagnostic({
+        tone: "danger",
+        title: "接続先が見つかりません",
+        detail: "6桁コードだけでは相手PCを特定できません。相手のKunoChatを起動し、同じネットワークで「見つかった相手」に表示されてから接続してください。"
+      });
+      setView("pairing");
+      return;
+    }
     const detectedPeerUrl =
       selectedPeer?.signalingUrl === LOCAL_BROWSER_SIGNALING_URL
         ? LOCAL_BROWSER_SIGNALING_URL
@@ -1303,6 +1313,7 @@ export function App() {
           <Composer
             value={draftText}
             hasAttachments={attachments.length > 0}
+            connectionStatus={connectionStatus}
             disabled={composerDisabled}
             onChange={handleDraftChange}
             onSend={() => void handleSendDraft()}

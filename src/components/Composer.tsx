@@ -1,11 +1,13 @@
 import { Plus, SendHorizontal } from "lucide-react";
 import clsx from "clsx";
 import { useEffect, useRef, type KeyboardEvent } from "react";
+import type { ConnectionStatus } from "../features/chat/messageTypes";
 import { platformAdapter } from "../features/native/platformAdapter";
 
 type ComposerProps = {
   value: string;
   hasAttachments: boolean;
+  connectionStatus: ConnectionStatus;
   disabled?: boolean;
   onChange: (value: string) => void;
   onSend: () => void;
@@ -13,8 +15,18 @@ type ComposerProps = {
   onBlur?: () => void;
 };
 
-export function Composer({ value, hasAttachments, disabled = false, onChange, onSend, onPickFiles, onBlur }: ComposerProps) {
+export function Composer({
+  value,
+  hasAttachments,
+  connectionStatus,
+  disabled = false,
+  onChange,
+  onSend,
+  onPickFiles,
+  onBlur
+}: ComposerProps) {
   const canSend = !disabled && (value.trim().length > 0 || hasAttachments);
+  const queuesOffline = connectionStatus !== "connected";
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -41,16 +53,21 @@ export function Composer({ value, hasAttachments, disabled = false, onChange, on
 
   function handleSend() {
     if (!canSend) return;
-    // Flash animation on button element
-    const btn = document.getElementById("composer-send-btn");
-    btn?.classList.remove("kuno-send-bounce");
-    void btn?.offsetWidth; // reflow to restart animation
-    btn?.classList.add("kuno-send-bounce");
+    const button = document.getElementById("composer-send-btn");
+    button?.classList.remove("kuno-send-bounce");
+    void button?.offsetWidth;
+    button?.classList.add("kuno-send-bounce");
     onSend();
   }
 
   return (
     <div className="w-full min-w-0 max-w-full shrink-0 overflow-hidden border-t border-border bg-bg-glass px-3 py-3 backdrop-blur-[20px]">
+      {queuesOffline && !disabled ? (
+        <div className="mb-2 flex min-h-6 items-center justify-between gap-2 rounded-input bg-surface px-2.5 py-1 text-[10px] text-muted">
+          <span className="min-w-0 truncate">オフライン送信: 相手が戻るまで送信待ちに保存します</span>
+          <span className="shrink-0 font-semibold text-accent">送信OK</span>
+        </div>
+      ) : null}
       <div
         className={clsx(
           "grid min-h-[44px] w-full min-w-0 max-w-full items-end gap-1.5 overflow-hidden rounded-input border bg-surface p-1.5 transition-all duration-200",
@@ -68,7 +85,7 @@ export function Composer({ value, hasAttachments, disabled = false, onChange, on
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
           onBlur={onBlur}
-          placeholder={disabled ? "まずペアリングしてください..." : "メッセージを入力..."}
+          placeholder={disabled ? "まずペアリングしてください..." : queuesOffline ? "オフラインでも送信待ちにできます" : "メッセージを入力..."}
           disabled={disabled}
           rows={1}
           aria-keyshortcuts="Enter"
@@ -89,8 +106,8 @@ export function Composer({ value, hasAttachments, disabled = false, onChange, on
             <button
               type="button"
               id="composer-send-btn"
-              aria-label="送信"
-              title="送信 (Enter)"
+              aria-label={queuesOffline ? "送信待ちに追加" : "送信"}
+              title={queuesOffline ? "送信待ちに追加 (Enter)" : "送信 (Enter)"}
               onClick={handleSend}
               disabled={!canSend}
               className={clsx(

@@ -18,6 +18,7 @@ export function BundleCard({ bundle, status }: BundleCardProps) {
   const failed = status === "failed";
   const previewItem = bundle.items.find((item) => item.kind === "image" && (item.previewUrl || item.thumbnail));
   const previewUrl = previewItem?.previewUrl || previewItem?.thumbnail;
+  const firstOpenablePath = bundle.items.find((item) => item.savePath ?? item.localPath);
 
   return (
     <div
@@ -39,11 +40,7 @@ export function BundleCard({ bundle, status }: BundleCardProps) {
             isSending ? "animate-pulse bg-amber-500" : isQueued ? "bg-amber-500" : isDone ? "bg-green-600" : failed ? "bg-red-500" : "bg-amber-500"
           )}
         >
-          {previewUrl ? (
-            <img src={previewUrl} alt="" className="h-full w-full bg-surface-active object-contain" />
-          ) : (
-            <Files className="h-5 w-5" />
-          )}
+          {previewUrl ? <img src={previewUrl} alt="" className="h-full w-full bg-surface-active object-contain" /> : <Files className="h-5 w-5" />}
         </div>
 
         <div className="min-w-0 flex-1 overflow-hidden">
@@ -77,12 +74,11 @@ export function BundleCard({ bundle, status }: BundleCardProps) {
             {isSending || status === "receiving" ? <span className="font-medium text-accent">{status === "receiving" ? "受信中..." : "送信中..."}</span> : null}
             {failed ? <span className="font-medium text-danger">失敗</span> : null}
             {isDone ? <span className="font-medium text-success">完了</span> : null}
-            {bundle.items.some((item) => item.savePath ?? item.localPath) && isDone ? (
+            {firstOpenablePath && isDone ? (
               <button
                 type="button"
                 onClick={() => {
-                  const firstItem = bundle.items.find((item) => item.savePath ?? item.localPath);
-                  const path = firstItem?.savePath ?? firstItem?.localPath;
+                  const path = firstOpenablePath.savePath ?? firstOpenablePath.localPath;
                   if (path) {
                     void platformAdapter.revealPath(path);
                   }
@@ -96,10 +92,7 @@ export function BundleCard({ bundle, status }: BundleCardProps) {
           </div>
           {isActive && bundle.items.some((item) => typeof item.progress === "number" && item.progress > 0 && item.progress < 100) ? (
             <div className="mt-2 h-1 overflow-hidden rounded-pill bg-faint/40">
-              <div
-                className="h-full rounded-pill bg-accent transition-all duration-300"
-                style={{ width: `${Math.max(2, Math.min(100, averageProgress(bundle)))}%` }}
-              />
+              <div className="h-full rounded-pill bg-accent transition-all duration-300" style={{ width: `${Math.max(2, Math.min(100, averageProgress(bundle)))}%` }} />
             </div>
           ) : null}
         </div>
@@ -110,7 +103,7 @@ export function BundleCard({ bundle, status }: BundleCardProps) {
 
 function buildBundleTitle(bundle: BundleContent): string {
   const firstName = bundle.items[0]?.name;
-  if (!firstName) return `${bundle.count} files`;
+  if (!firstName) return `${bundle.count}ファイル`;
   return bundle.count > 1 ? `${firstName} ほか${bundle.count - 1}件` : firstName;
 }
 

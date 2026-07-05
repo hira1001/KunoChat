@@ -161,7 +161,7 @@ function MessageStatusIcon({ message }: { message: ChatMessage }) {
   const status = message.status;
   if (status === "queued" && message.error?.code === "pending_connection") {
     return (
-      <span className="inline-flex items-center gap-1 rounded-pill bg-surface-hover px-1.5 py-0.5 text-[10px] font-semibold text-muted">
+      <span className="inline-flex items-center gap-1 rounded-pill bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/30 dark:text-amber-100">
         <Clock3 className="h-3 w-3" />
         送信待ち
       </span>

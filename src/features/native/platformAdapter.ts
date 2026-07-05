@@ -311,7 +311,7 @@ export const platformAdapter = {
         const name = metadata.name || fallbackName;
         const mime = inferMime(name);
         return {
-          id: `picked_${Date.now()}_${index}`,
+          id: `picked_${crypto.randomUUID()}`,
           name,
           size: metadata.size,
           mime,
@@ -724,7 +724,7 @@ function pickBrowserFiles(): Promise<PickedFile[]> {
           files.map((file, index) => {
             const mime = file.type || inferMime(file.name);
             return {
-              id: `picked_${Date.now()}_${index}`,
+              id: `picked_${crypto.randomUUID()}`,
               name: file.name || `file-${index + 1}`,
               size: file.size,
               mime,

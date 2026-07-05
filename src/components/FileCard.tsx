@@ -27,16 +27,10 @@ export function FileCard({ asset, status, progress, error, speed, eta, onPause, 
   const isActive = isSending || isReceiving;
   const isDone = status === "received" || status === "saved";
   const verified = Boolean(asset.sha256 && isDone);
-  const isFolder = asset.isFolder;
-  const label = isFolder ? "DIR" : fileLabel(asset.name, asset.mime);
-  const color = isFolder ? "bg-amber-600" : labelColor(label);
+  const label = asset.isFolder ? "DIR" : fileLabel(asset.name, asset.mime);
+  const color = asset.isFolder ? "bg-amber-600" : labelColor(label);
   const openPath = asset.savePath ?? asset.localPath;
   const canOpen = Boolean(openPath) && (status === "sent" || status === "received" || status === "saved");
-
-  const formatSpeed = (bytesPerSec?: number) => {
-    if (!bytesPerSec) return "";
-    return `${formatBytes(bytesPerSec)}/s`;
-  };
 
   const handleOpen = () => {
     if (openPath) {
@@ -50,37 +44,19 @@ export function FileCard({ asset, status, progress, error, speed, eta, onPause, 
     }
   };
 
-  const formatEta = (seconds?: number) => {
-    if (seconds === undefined) return "";
-    if (seconds === 0) return "完了間近";
-    if (seconds < 60) return `残り ${seconds}秒`;
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `残り ${mins}分${secs}秒`;
-  };
-
   return (
     <div
       className={clsx(
         "relative w-full min-w-0 max-w-full overflow-hidden rounded-card border bg-surface p-3 shadow-card transition-all duration-300",
-        isDone
-          ? "border-success/30 kuno-success-flash"
-          : failed
-          ? "border-danger/30"
-          : "border-border"
+        isDone ? "border-success/30" : failed ? "border-danger/30" : "border-border"
       )}
     >
-      {/* Blurred thumbnail background if pending download */}
       {isDownloadPending && asset.thumbnail ? (
-        <div
-          className="absolute inset-0 z-0 bg-cover bg-center opacity-[0.12] blur-[8px] pointer-events-none"
-          style={{ backgroundImage: `url(${asset.thumbnail})` }}
-        />
+        <div className="pointer-events-none absolute inset-0 z-0 bg-cover bg-center opacity-[0.12] blur-[8px]" style={{ backgroundImage: `url(${asset.thumbnail})` }} />
       ) : null}
 
       <div className="relative z-10">
         <div className="flex min-w-0 items-center gap-3">
-          {/* File type badge */}
           <div
             className={clsx(
               "relative grid h-10 w-10 shrink-0 place-items-center rounded-[7px] text-[9px] font-bold text-white shadow-sm transition-transform duration-200",
@@ -91,7 +67,6 @@ export function FileCard({ asset, status, progress, error, speed, eta, onPause, 
             {label}
           </div>
 
-          {/* File info */}
           <div className="min-w-0 flex-1 overflow-hidden">
             <div className="truncate text-[13px] font-semibold tracking-[-0.01em] text-text">{asset.name}</div>
             <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted">
@@ -102,41 +77,32 @@ export function FileCard({ asset, status, progress, error, speed, eta, onPause, 
                   検証済み
                 </span>
               ) : null}
-              {isSending ? (
-                <span className="text-accent flex items-center gap-1.5">
-                  送信中... {speed ? <span>• {formatSpeed(speed)}</span> : null} {eta !== undefined ? <span>• {formatEta(eta)}</span> : null}
-                </span>
-              ) : null}
-              {isReceiving ? (
-                <span className="text-accent flex items-center gap-1.5">
-                  受信中... {speed ? <span>• {formatSpeed(speed)}</span> : null} {eta !== undefined ? <span>• {formatEta(eta)}</span> : null}
-                </span>
-              ) : null}
+              {isSending ? <span className="text-accent">送信中{speed ? ` ・ ${formatBytes(speed)}/s` : ""}{eta !== undefined ? ` ・ ${formatEta(eta)}` : ""}</span> : null}
+              {isReceiving ? <span className="text-accent">受信中{speed ? ` ・ ${formatBytes(speed)}/s` : ""}{eta !== undefined ? ` ・ ${formatEta(eta)}` : ""}</span> : null}
               {isPaused ? <span className="text-warning">一時停止中</span> : null}
-              {isDownloadPending ? <span className="text-accent/80 font-medium">ダウンロード待ち</span> : null}
-              {failed ? <span className="break-words text-danger">{error ?? "転送失敗"}</span> : null}
+              {isDownloadPending ? <span className="font-medium text-accent/80">保存待ち</span> : null}
+              {failed ? <span className="break-words text-danger">{error ?? "転送に失敗しました"}</span> : null}
               {cancelled ? <span className="text-faint">キャンセル済み</span> : null}
             </div>
           </div>
 
-          {/* Action buttons */}
           <div className="flex shrink-0 items-center gap-1">
             {onDownload && (isDownloadPending || failed) ? (
               <button
                 type="button"
-                aria-label={failed ? "転送を再開" : "ダウンロードを開始"}
+                aria-label={failed ? "転送を再開" : "ファイルを保存"}
                 onClick={onDownload}
                 className="kuno-focus-ring flex items-center gap-1 rounded-input border border-accent bg-accent px-2.5 py-1 text-[11px] font-bold text-white shadow-sm transition-all duration-150 hover:bg-accent-hover active:scale-95"
               >
                 <Play className="h-3 w-3 fill-current" />
-                {failed ? "再開" : "ダウンロード"}
+                {failed ? "再開" : "保存"}
               </button>
             ) : null}
             {canOpen ? (
               <>
                 <button
                   type="button"
-                  aria-label={`${asset.name} を開く`}
+                  aria-label={`${asset.name}を開く`}
                   onClick={handleOpen}
                   className="kuno-focus-ring inline-flex h-7 items-center gap-1 rounded-input border border-border bg-surface px-2 text-[11px] font-semibold text-accent transition-all duration-150 hover:bg-accent-soft active:scale-95"
                 >
@@ -145,7 +111,7 @@ export function FileCard({ asset, status, progress, error, speed, eta, onPause, 
                 </button>
                 <button
                   type="button"
-                  aria-label={`${asset.name} の場所を表示`}
+                  aria-label={`${asset.name}の場所を表示`}
                   onClick={handleReveal}
                   className="kuno-focus-ring grid h-7 w-7 place-items-center rounded-full border border-border bg-surface-hover text-muted transition-all duration-150 hover:border-accent hover:text-accent active:scale-90"
                 >
@@ -173,11 +139,10 @@ export function FileCard({ asset, status, progress, error, speed, eta, onPause, 
                 <Play className="h-3 w-3" />
               </button>
             ) : null}
-            {failed && (!onDownload) ? <AlertTriangle className="h-4 w-4 text-danger" /> : null}
+            {failed && !onDownload ? <AlertTriangle className="h-4 w-4 text-danger" /> : null}
           </div>
         </div>
 
-        {/* Progress bar */}
         {((isActive || isPaused) && !isDownloadPending) && typeof activeProgress === "number" ? (
           <div className="mt-3">
             <div className="mb-1.5 flex items-center justify-between text-[11px]">
@@ -188,19 +153,13 @@ export function FileCard({ asset, status, progress, error, speed, eta, onPause, 
             </div>
             <div className="h-1.5 overflow-hidden rounded-pill bg-surface-active">
               <div
-                className={clsx(
-                  "kuno-progress-shimmer h-full rounded-pill transition-all duration-300 ease-out",
-                  isPaused
-                    ? "bg-warning/60"
-                    : "bg-gradient-to-r from-accent via-blue-400 to-accent-hover"
-                )}
+                className={clsx("kuno-progress-shimmer h-full rounded-pill transition-all duration-300 ease-out", isPaused ? "bg-warning/60" : "bg-gradient-to-r from-accent via-blue-400 to-accent-hover")}
                 style={{ width: `${Math.max(2, Math.min(100, activeProgress))}%` }}
               />
             </div>
           </div>
         ) : null}
 
-        {/* Completion line */}
         {isDone ? (
           <div className="mt-2.5 h-1 overflow-hidden rounded-pill bg-success/20">
             <div className="h-full w-full rounded-pill bg-success transition-all duration-500" />
@@ -209,6 +168,15 @@ export function FileCard({ asset, status, progress, error, speed, eta, onPause, 
       </div>
     </div>
   );
+}
+
+function formatEta(seconds?: number): string {
+  if (seconds === undefined) return "";
+  if (seconds <= 0) return "完了間近";
+  if (seconds < 60) return `残り ${seconds}秒`;
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `残り ${mins}分${secs}秒`;
 }
 
 function labelColor(label: string): string {

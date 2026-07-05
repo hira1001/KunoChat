@@ -90,7 +90,9 @@ function EmptyState({ isConnected, onPair }: { isConnected: boolean; onPair?: ()
         </div>
         <div className="mt-3 text-[15px] font-semibold text-text">{isConnected ? "何か送ってみましょう" : "未接続でも送信待ちにできます"}</div>
         <div className="mx-auto mt-1.5 max-w-[220px] text-[12px] leading-[1.6] text-muted">
-          {isConnected ? "テキストを入力するか、ファイルをここにドロップしてください。" : "メッセージやファイルはこのPCに保存され、相手を選ぶと自動送信されます。"}
+          {isConnected
+            ? "テキストを入力するか、ファイルをここにドロップしてください。"
+            : "メッセージやファイルはこのPCに保存され、相手を選ぶと自動送信されます。"}
         </div>
         {!isConnected && onPair ? (
           <button

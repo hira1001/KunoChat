@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { MessageSquareDashed, Wifi } from "lucide-react";
 import type { ChatMessage, ConnectionStatus } from "../features/chat/messageTypes";
 import { MessageBubble } from "./MessageBubble";
@@ -33,9 +33,9 @@ export function MessageList({
   const isConnected = connectionStatus === "connected";
   const hasContent = messages.length > 0 || showTyping;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!scrollRef.current || !shouldStickToBottomRef.current) return;
-    scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "auto" });
   }, [messages.length, showTyping]);
 
   function handleScroll() {

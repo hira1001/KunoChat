@@ -30,7 +30,7 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, o
   const canDownload = !mine && (message.status === "queued" || message.status === "failed") && Boolean(onDownload);
 
   return (
-    <div className={clsx("kuno-message-enter flex w-full min-w-0 gap-2.5", mine ? "justify-end" : "justify-start")}>
+    <div className={clsx("flex w-full min-w-0 gap-2.5", mine ? "justify-end" : "justify-start")}>
       {!mine ? (
         <div className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-border bg-surface text-[10px] font-bold text-muted shadow-card">
           {message.senderName.trim().charAt(0).toUpperCase() || "P"}

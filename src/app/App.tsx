@@ -1348,7 +1348,7 @@ export function App() {
             diagnostic={diagnostic}
             status={connectionStatus}
             canRetry={Boolean(lastAutoConnect)}
-            autoMode={Boolean(activeConversation?.peerHint)}
+            autoMode={Boolean(activeConversation?.peerHint || lastAutoConnect)}
             peerName={peerName}
             onPair={() => setView("pairing")}
             onRetry={handleRetryAutoConnect}
@@ -1691,7 +1691,12 @@ function ConnectionBanner({
     return null;
   }
 
-  const activeDiagnostic = diagnostic ?? reconnectDiagnostic(status, canRetry, autoMode, peerName);
+  const activeDiagnostic = sanitizeConnectionDiagnostic(
+    diagnostic ?? reconnectDiagnostic(status, canRetry, autoMode, peerName),
+    status,
+    autoMode,
+    peerName
+  );
   const toneClass =
     activeDiagnostic.tone === "danger"
       ? "border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-950/30 dark:text-red-200"
@@ -1700,25 +1705,53 @@ function ConnectionBanner({
         : "border-blue-100 bg-blue-50 text-blue-700 dark:border-blue-400/20 dark:bg-blue-950/30 dark:text-blue-100";
 
   return (
-    <div className={`mx-3 mt-3 max-w-[calc(100%-1.5rem)] overflow-hidden rounded-card border px-3 py-2.5 ${toneClass}`} role="status">
-      <div className="flex min-w-0 items-start justify-between gap-3">
+    <div className={`mx-3 mt-2 max-w-[calc(100%-1.5rem)] overflow-hidden rounded-card border px-3 py-2 ${toneClass}`} role="status">
+      <div className="flex min-w-0 items-center justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="text-[12px] font-semibold">{activeDiagnostic.title}</div>
-          <div className="mt-0.5 break-words text-[11px] leading-4 opacity-90">{activeDiagnostic.detail}</div>
+          <div className="mt-0.5 overflow-hidden text-[11px] leading-4 opacity-90 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
+            {activeDiagnostic.detail}
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {!autoMode && canRetry ? (
-            <button type="button" onClick={onRetry} className="kuno-focus-ring min-h-8 rounded-input bg-white/80 px-3 py-1.5 text-[12px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
+            <button type="button" onClick={onRetry} className="kuno-focus-ring min-h-8 whitespace-nowrap rounded-input bg-white/80 px-2.5 py-1.5 text-[11px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
               前回の相手に再接続
             </button>
           ) : null}
-          <button type="button" onClick={onPair} className="kuno-focus-ring min-h-8 rounded-input bg-white/80 px-3 py-1.5 text-[12px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
+          <button type="button" onClick={onPair} className="kuno-focus-ring min-h-8 whitespace-nowrap rounded-input bg-white/80 px-2.5 py-1.5 text-[11px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
             {autoMode ? "接続先変更" : canRetry ? "別の相手を選ぶ" : "接続先を選ぶ"}
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+function sanitizeConnectionDiagnostic(
+  diagnostic: ConnectionDiagnostic,
+  status: ConnectionStatus,
+  autoMode: boolean,
+  peerName: string
+): ConnectionDiagnostic {
+  const technicalDetail = /Cannot reach|signaling server|ws:\/\/|wss:\/\/|timed out|ECONN|ENOTFOUND|NetworkError/i.test(diagnostic.detail);
+  if (autoMode && (technicalDetail || status === "failed" || status === "offline" || status === "pairing")) {
+    return {
+      tone: "info",
+      title: "自動接続待機中",
+      detail: `${peerName} が同じチャットを開くとオンラインになります。送信内容は送信待ちに保存されます。`
+    };
+  }
+  if (technicalDetail) {
+    return {
+      tone: "warning",
+      title: "接続できません",
+      detail: "相手のKunoChatが起動中か、同じネットワークにいるかを確認してください。送信内容は送信待ちに保存されます。"
+    };
+  }
+  return diagnostic.detail.length > 90
+    ? { ...diagnostic, detail: `${diagnostic.detail.slice(0, 87)}...` }
+    : diagnostic;
 }
 
 function reconnectDiagnostic(status: ConnectionStatus, canRetry: boolean, autoMode: boolean, peerName: string): ConnectionDiagnostic {

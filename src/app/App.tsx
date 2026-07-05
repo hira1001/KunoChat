@@ -101,6 +101,7 @@ export function App() {
     activeConversationId,
     conversations,
     messages,
+    deliveryOutbox,
     draftText,
     attachments,
     unreadCount,
@@ -1170,6 +1171,16 @@ export function App() {
   const activeMessages = messages.filter((message) => (message.conversationId ?? DEFAULT_CONVERSATION_ID) === activeConversationId);
   const peerName = activeConversation?.displayName ?? settings.peerDisplayName ?? (connectionStatus === "connected" ? "Peer" : "未接続");
   const composerDisabled = false;
+  const pendingByConversation = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const record of deliveryOutbox) {
+      if (record.status === "local_queued" || record.status === "failed_retryable") {
+        counts[record.conversationId] = (counts[record.conversationId] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }, [deliveryOutbox]);
+  const pendingOutboxCount = Object.values(pendingByConversation).reduce((total, count) => total + count, 0);
 
   function handleDraftChange(value: string) {
     setDraftText(value);
@@ -1284,6 +1295,7 @@ export function App() {
       mode={currentView}
       connectionState={connectionStatus}
       unreadCount={unreadCount}
+      pendingCount={pendingOutboxCount}
       activeTransferCount={messages.filter((message) => message.status === "sending").length}
       onOpenMain={handleOpenMain}
     >
@@ -1333,6 +1345,7 @@ export function App() {
             peerName={peerName}
             conversations={conversations}
             activeConversationId={activeConversationId}
+            pendingByConversation={pendingByConversation}
             onSettings={() => setView("settings")}
             onHistory={() => setView("history")}
             onMini={() => setView("mini")}

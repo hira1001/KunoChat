@@ -6,13 +6,15 @@ import { BrandMark } from "./BrandMark";
 type MiniPillProps = {
   status: ConnectionStatus;
   unreadCount: number;
+  pendingCount: number;
   activeTransferCount: number;
   onOpen: () => void;
 };
 
-export function MiniPill({ status, unreadCount, activeTransferCount, onOpen }: MiniPillProps) {
-  const transferProgress = activeTransferCount > 0;
+export function MiniPill({ status, unreadCount, pendingCount, activeTransferCount, onOpen }: MiniPillProps) {
+  const transferProgress = activeTransferCount > 0 || pendingCount > 0;
   const unreadLabel = unreadCount > 99 ? "99+" : String(unreadCount);
+  const pendingLabel = pendingCount > 99 ? "99+" : String(pendingCount);
 
   return (
     <button
@@ -29,6 +31,13 @@ export function MiniPill({ status, unreadCount, activeTransferCount, onOpen }: M
           className="grid h-5 min-w-5 shrink-0 place-items-center rounded-pill bg-red-500 px-1 text-[10px] font-bold leading-none text-white shadow-[0_0_0_2px_var(--bg),0_8px_18px_rgba(239,68,68,0.35)]"
         >
           {unreadLabel}
+        </span>
+      ) : pendingCount > 0 ? (
+        <span
+          aria-label={`${pendingCount} queued messages`}
+          className="grid h-5 min-w-5 shrink-0 place-items-center rounded-pill bg-amber-500 px-1 text-[10px] font-bold leading-none text-white shadow-[0_0_0_2px_var(--bg),0_8px_18px_rgba(245,158,11,0.30)]"
+        >
+          {pendingLabel}
         </span>
       ) : (
         <StatusDot status={status} label={status} />

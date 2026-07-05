@@ -1,5 +1,6 @@
-import { ExternalLink, ImageIcon, Play, ZoomIn } from "lucide-react";
+import { ExternalLink, ImageIcon, Play, X, ZoomIn } from "lucide-react";
 import clsx from "clsx";
+import { useState } from "react";
 import { formatBytes } from "../features/chat/format";
 import type { AssetContent, MessageStatus } from "../features/chat/messageTypes";
 import { platformAdapter } from "../features/native/platformAdapter";
@@ -14,6 +15,7 @@ type ImageCardProps = {
 };
 
 export function ImageCard({ asset, status, progress, variant = "card", onDownload }: ImageCardProps) {
+  const [previewOpen, setPreviewOpen] = useState(false);
   const activeProgress = progress ?? asset.progress;
   const messageVariant = variant === "message";
   const isActive = status === "sending" || status === "receiving";
@@ -40,16 +42,20 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
             <img
               src={previewUrl}
               alt={asset.name}
+              onClick={() => {
+                if (!isActive) setPreviewOpen(true);
+              }}
               className={clsx(
                 "max-h-[320px] w-full object-contain transition-all duration-500",
+                !isActive && "cursor-zoom-in",
                 isActive || isThumbnailOnly ? "scale-[1.02] blur-[8px]" : "scale-100 blur-0"
               )}
             />
-            {canOpen ? (
+            {!isActive ? (
               <button
                 type="button"
-                onClick={handleOpen}
-                aria-label={`${asset.name}を開く`}
+                onClick={() => setPreviewOpen(true)}
+                aria-label={`${asset.name}を拡大`}
                 className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/20 group-hover:opacity-100"
               >
                 <ZoomIn className="h-6 w-6 text-white drop-shadow-lg" />
@@ -128,6 +134,35 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
       ) : null}
 
       {isDone && messageVariant ? <div className="h-0.5 bg-gradient-to-r from-success/60 to-success" /> : null}
+
+      {previewOpen && previewUrl ? (
+        <div className="fixed inset-0 z-[80] flex flex-col bg-black/90" role="dialog" aria-modal="true" aria-label={asset.name}>
+          <div className="flex h-12 shrink-0 items-center gap-2 px-3 text-white">
+            <div className="min-w-0 flex-1 truncate text-[13px] font-semibold">{asset.name}</div>
+            {canOpen ? (
+              <button
+                type="button"
+                onClick={handleOpen}
+                className="kuno-focus-ring inline-flex h-8 shrink-0 items-center gap-1.5 rounded-input bg-white/10 px-2.5 text-[11px] font-semibold text-white transition-colors hover:bg-white/20"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                開く
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setPreviewOpen(false)}
+              aria-label="プレビューを閉じる"
+              className="kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <button type="button" onClick={() => setPreviewOpen(false)} className="grid min-h-0 flex-1 place-items-center p-3">
+            <img src={previewUrl} alt={asset.name} className="max-h-full max-w-full object-contain shadow-2xl" />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

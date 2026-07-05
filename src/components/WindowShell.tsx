@@ -6,6 +6,7 @@ type WindowShellProps = {
   mode: AppView;
   connectionState: ConnectionStatus;
   unreadCount: number;
+  pendingCount: number;
   activeTransferCount: number;
   onOpenMain: () => void;
   children: ReactNode;
@@ -15,6 +16,7 @@ export function WindowShell({
   mode,
   connectionState,
   unreadCount,
+  pendingCount,
   activeTransferCount,
   onOpenMain,
   children
@@ -25,6 +27,7 @@ export function WindowShell({
         <MiniPill
           status={connectionState}
           unreadCount={unreadCount}
+          pendingCount={pendingCount}
           activeTransferCount={activeTransferCount}
           onOpen={onOpenMain}
         />

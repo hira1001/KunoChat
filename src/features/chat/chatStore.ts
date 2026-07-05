@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { realtimeClient } from "../realtime/realtimeClient";
 import type {
   AppView,
+  AssetContent,
   ChatMessage,
   ConversationDraft,
   ConversationSummary,
@@ -17,6 +18,7 @@ import type {
 } from "./messageTypes";
 import { dbService, type TransferHistoryItem } from "../storage/db";
 import { platformAdapter } from "../native/platformAdapter";
+import { detectTextKind } from "../sendables/detectSendable";
 
 const MAX_PERSISTED_MESSAGES = 500;
 const MAX_DRAFT_ATTACHMENTS = 30;
@@ -72,6 +74,7 @@ type ChatStore = {
     size: number;
     mime: string;
     sha256?: string;
+    caption?: string;
     thumbnail?: string;
     isFolder?: boolean;
   }) => void;
@@ -361,6 +364,7 @@ export const useChatStore = create<ChatStore>()(
           if (state.messages.some((message) => message.id === input.id)) {
             return state;
           }
+          const content = textContentForMessage(input.text);
           const conversationId = conversationIdForIncomingPeer(state.conversations, input.senderId, state.activeConversationId, state.connectionStatus);
           const active = state.activeConversationId === conversationId;
           const unreadIncrement = active && state.currentView !== "mini" ? 0 : 1;
@@ -379,17 +383,15 @@ export const useChatStore = create<ChatStore>()(
               {
                 id: input.id,
                 conversationId,
-                kind: "text",
+                kind: content.kind,
                 sender: "peer",
                 senderId: input.senderId,
                 senderName: input.senderName,
                 createdAt: input.createdAt,
                 status: "received",
-                text: {
-                  text: input.text,
-                  plainText: input.text,
-                  length: input.text.length
-                }
+                text: content.text,
+                link: content.link,
+                code: content.code
               }
             ],
             conversations: nextConversations,
@@ -402,6 +404,15 @@ export const useChatStore = create<ChatStore>()(
         }),
       receivePeerAsset: (input) =>
         set((state) => {
+          const item = assetContentFromIncoming(input);
+          const transferState: TransferState = {
+            transferId: input.transferId,
+            status: "queued",
+            progress: 0,
+            size: input.size,
+            mime: input.mime,
+            sha256: input.sha256
+          };
           void dbService.logTransfer({
             id: input.transferId,
             name: input.name,
@@ -420,9 +431,73 @@ export const useChatStore = create<ChatStore>()(
             peerId: input.senderId,
             unreadIncrement,
             lastMessageAt: input.createdAt,
-            lastMessagePreview: input.name
+            lastMessagePreview: input.caption || input.name
           });
           const existingMessage = state.messages.find((message) => message.id === input.id);
+          const shouldStoreAsBundle = Boolean(input.caption) || existingMessage?.kind === "bundle" || Boolean(existingMessage?.bundle);
+
+          if (shouldStoreAsBundle) {
+            const messages = existingMessage
+              ? state.messages.map((message) => {
+                  if (message.id !== input.id) {
+                    return message;
+                  }
+                  const existingItems = message.bundle?.items ?? (message.asset ? [message.asset] : []);
+                  const items = upsertBundleItem(existingItems, item);
+                  return {
+                    ...message,
+                    kind: "bundle" as const,
+                    conversationId: message.conversationId ?? conversationId,
+                    status: "queued" as const,
+                    progress: 0,
+                    error: undefined,
+                    asset: undefined,
+                    bundle: {
+                      caption: message.bundle?.caption || input.caption,
+                      transferId: message.bundle?.transferId ?? input.id,
+                      items,
+                      count: items.length,
+                      totalSize: totalBundleSize(items)
+                    }
+                  };
+                })
+              : [
+                  ...state.messages,
+                  {
+                    id: input.id,
+                    conversationId,
+                    kind: "bundle" as const,
+                    sender: "peer" as const,
+                    senderId: input.senderId,
+                    senderName: input.senderName,
+                    createdAt: input.createdAt,
+                    status: "queued" as const,
+                    progress: 0,
+                    bundle: {
+                      caption: input.caption,
+                      transferId: input.id,
+                      items: [item],
+                      count: 1,
+                      totalSize: item.size
+                    }
+                  }
+                ];
+
+            return {
+              messages,
+              conversations: nextConversations,
+              unreadCount: totalUnread(nextConversations),
+              transferStates: {
+                ...state.transferStates,
+                [input.transferId]: transferState
+              },
+              settings: {
+                ...state.settings,
+                peerDisplayName: input.senderName
+              }
+            };
+          }
+
           if (
             existingMessage &&
             existingMessage.status !== "failed" &&
@@ -443,18 +518,7 @@ export const useChatStore = create<ChatStore>()(
                       status: "queued",
                       progress: 0,
                       error: undefined,
-                      asset: {
-                        id: input.id,
-                        kind: input.kind,
-                        name: input.name,
-                        size: input.size,
-                        mime: input.mime,
-                        sha256: input.sha256,
-                        transferId: input.transferId,
-                        progress: 0,
-                        thumbnail: input.thumbnail,
-                        isFolder: input.isFolder
-                      }
+                      asset: item
                     }
                   : message
               ),
@@ -462,14 +526,7 @@ export const useChatStore = create<ChatStore>()(
               unreadCount: totalUnread(nextConversations),
               transferStates: {
                 ...state.transferStates,
-                [input.transferId]: {
-                  transferId: input.transferId,
-                  status: "queued",
-                  progress: 0,
-                  size: input.size,
-                  mime: input.mime,
-                  sha256: input.sha256
-                }
+                [input.transferId]: transferState
               },
               settings: {
                 ...state.settings,
@@ -491,32 +548,14 @@ export const useChatStore = create<ChatStore>()(
                 createdAt: input.createdAt,
                 status: "queued",
                 progress: 0,
-                asset: {
-                  id: input.id,
-                  kind: input.kind,
-                  name: input.name,
-                  size: input.size,
-                  mime: input.mime,
-                  sha256: input.sha256,
-                  transferId: input.transferId,
-                  progress: 0,
-                  thumbnail: input.thumbnail,
-                  isFolder: input.isFolder
-                }
+                asset: item
               }
             ],
             conversations: nextConversations,
             unreadCount: totalUnread(nextConversations),
             transferStates: {
               ...state.transferStates,
-              [input.transferId]: {
-                transferId: input.transferId,
-                status: "queued",
-                progress: 0,
-                size: input.size,
-                mime: input.mime,
-                sha256: input.sha256
-              }
+              [input.transferId]: transferState
             },
             settings: {
               ...state.settings,
@@ -561,7 +600,13 @@ export const useChatStore = create<ChatStore>()(
                         ? activeStatus
                         : message.status,
                     progress,
-                    asset: message.asset ? { ...message.asset, progress } : message.asset
+                    asset: message.asset ? { ...message.asset, progress } : message.asset,
+                    bundle: message.bundle
+                      ? {
+                          ...message.bundle,
+                          items: message.bundle.items.map((item) => (item.transferId === transferId ? { ...item, progress } : item))
+                        }
+                      : message.bundle
                   }
                 : message
             ),
@@ -612,40 +657,44 @@ export const useChatStore = create<ChatStore>()(
             }
           }
           return {
-            messages: state.messages.map((message) =>
-              message.id === messageId
+            messages: state.messages.map((message) => {
+              if (message.id !== messageId) {
+                return message;
+              }
+              const nextAsset = message.asset
                 ? {
-                    ...message,
-                    status: message.sender === "me" ? "sent" : "received",
+                    ...message.asset,
                     progress: 100,
-                    asset: message.asset
-                      ? {
-                          ...message.asset,
-                          progress: 100,
-                          previewUrl: objectUrl || message.asset.previewUrl,
-                          savePath: savePath || message.asset.savePath,
-                          sha256: sha256 || message.asset.sha256
-                        }
-                      : message.asset,
-                    bundle: message.bundle
-                      ? {
-                          ...message.bundle,
-                          items: message.bundle.items.map((item) =>
-                            item.transferId === transferId
-                              ? {
-                                  ...item,
-                                  progress: 100,
-                                  previewUrl: objectUrl || item.previewUrl,
-                                  savePath: savePath || item.savePath,
-                                  sha256: sha256 || item.sha256
-                                }
-                              : item
-                          )
-                        }
-                      : message.bundle
+                    previewUrl: objectUrl || message.asset.previewUrl,
+                    savePath: savePath || message.asset.savePath,
+                    sha256: sha256 || message.asset.sha256
                   }
-                : message
-            ),
+                : message.asset;
+              const nextBundle = message.bundle
+                ? {
+                    ...message.bundle,
+                    items: message.bundle.items.map((item) =>
+                      item.transferId === transferId
+                        ? {
+                            ...item,
+                            progress: 100,
+                            previewUrl: objectUrl || item.previewUrl,
+                            savePath: savePath || item.savePath,
+                            sha256: sha256 || item.sha256
+                          }
+                        : item
+                    )
+                  }
+                : message.bundle;
+              const complete = nextBundle ? nextBundle.items.every((item) => (item.progress ?? 0) >= 100) : true;
+              return {
+                ...message,
+                status: complete ? (message.sender === "me" ? "sent" : "received") : message.sender === "me" ? "sending" : "receiving",
+                progress: nextBundle ? averageBundleProgress(nextBundle.items) : 100,
+                asset: nextAsset,
+                bundle: nextBundle
+              };
+            }),
             transferStates: {
               ...state.transferStates,
               [transferId]: {
@@ -897,12 +946,7 @@ export const useChatStore = create<ChatStore>()(
                 }
               : {
                   ...baseMessage,
-                  kind: "text",
-                  text: {
-                    text: trimmed,
-                    plainText: trimmed,
-                    length: trimmed.length
-                  }
+                  ...textContentForMessage(trimmed)
                 };
 
         if (message.asset) {
@@ -1589,22 +1633,110 @@ function conversationIdForIncomingPeer(
   connectionStatus: ConnectionStatus
 ): string {
   const canonicalId = conversationIdForPeer(senderId);
-  const existing = conversations.find((conversation) => conversation.id === canonicalId || conversation.peerId === senderId);
-  if (existing) {
-    return existing.id;
-  }
-
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
   if (
     activeConversation &&
-    activeConversation.id !== DEFAULT_CONVERSATION_ID &&
-    activeConversation.peerHint &&
     (connectionStatus === "connected" || connectionStatus === "connecting" || connectionStatus === "reconnecting")
   ) {
     return activeConversation.id;
   }
 
+  const existing = conversations.find((conversation) => conversation.id === canonicalId || conversation.peerId === senderId);
+  if (existing) {
+    return existing.id;
+  }
+
   return canonicalId;
+}
+
+function assetContentFromIncoming(input: {
+  id: string;
+  transferId: string;
+  kind: "image" | "file";
+  name: string;
+  size: number;
+  mime: string;
+  sha256?: string;
+  thumbnail?: string;
+  isFolder?: boolean;
+}): AssetContent {
+  return {
+    id: `${input.id}_${input.transferId}`,
+    kind: input.kind,
+    name: input.name,
+    size: input.size,
+    mime: input.mime,
+    sha256: input.sha256,
+    transferId: input.transferId,
+    progress: 0,
+    thumbnail: input.thumbnail,
+    previewUrl: input.thumbnail,
+    isFolder: input.isFolder
+  };
+}
+
+function upsertBundleItem(items: AssetContent[], next: AssetContent): AssetContent[] {
+  const found = items.some((item) => item.transferId === next.transferId);
+  if (!found) {
+    return [...items, next];
+  }
+  return items.map((item) => (item.transferId === next.transferId ? { ...item, ...next, progress: next.progress ?? item.progress } : item));
+}
+
+function totalBundleSize(items: AssetContent[]): number {
+  return items.reduce((total, item) => total + item.size, 0);
+}
+
+function averageBundleProgress(items: AssetContent[]): number {
+  if (items.length === 0) {
+    return 0;
+  }
+  return Math.round(items.reduce((total, item) => total + (item.progress ?? 0), 0) / items.length);
+}
+
+function textContentForMessage(text: string): Pick<ChatMessage, "kind" | "text" | "link" | "code"> {
+  const plainText = text.trim();
+  const baseText = {
+    text: plainText,
+    plainText,
+    length: plainText.length
+  };
+  const kind = detectTextKind(plainText);
+
+  if (kind === "link") {
+    const url = new URL(plainText);
+    return {
+      kind: "link",
+      text: baseText,
+      link: {
+        url: plainText,
+        host: url.host
+      }
+    };
+  }
+
+  if (kind === "code") {
+    return {
+      kind: "code",
+      text: baseText,
+      code: {
+        code: plainText,
+        language: inferCodeLanguage(plainText)
+      }
+    };
+  }
+
+  return {
+    kind: "text",
+    text: baseText
+  };
+}
+
+function inferCodeLanguage(text: string): string | undefined {
+  if (/\b(function|const|let|var|console\.log)\b/.test(text)) return "javascript";
+  if (/\b(def|import|print)\b/.test(text)) return "python";
+  if (/<[A-Za-z][\s\S]*>/.test(text)) return "html";
+  return undefined;
 }
 
 function sanitizeTrustedPeer(value: unknown): TrustedPeer | undefined {
@@ -1678,6 +1810,12 @@ function sortConversations(left: ConversationSummary, right: ConversationSummary
 function messagePreview(message: ChatMessage): string {
   if (message.text?.text) {
     return message.text.text;
+  }
+  if (message.link?.url) {
+    return message.link.url;
+  }
+  if (message.code?.code) {
+    return message.code.code.split("\n", 1)[0] || "Code";
   }
   if (message.asset) {
     return message.asset.name;

@@ -653,6 +653,12 @@ export const platformAdapter = {
     }
   },
 
+  async setAppShortcut(shortcut: string): Promise<void> {
+    if (hasTauri) {
+      await invoke("set_app_shortcut", { shortcut });
+    }
+  },
+
   async getPlatform(): Promise<PlatformInfo> {
     if (!hasTauri) {
       return {
@@ -667,6 +673,17 @@ export const platformAdapter = {
 
   inferMime(name: string): string {
     return inferMime(name);
+  },
+
+  async downloadAndOpenInstaller(input: { url: string; fileName: string }): Promise<{ path: string } | undefined> {
+    if (!hasTauri) {
+      window.open(input.url, "_blank", "noopener,noreferrer");
+      return undefined;
+    }
+    return invoke<{ path: string }>("download_and_open_installer", {
+      url: input.url,
+      fileName: input.fileName
+    });
   }
 };
 

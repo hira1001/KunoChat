@@ -1,4 +1,5 @@
 import clsx from "clsx";
+import type { ReactNode } from "react";
 import { Check, CheckCheck, CircleX, Clock3, Pause, Play, RotateCcw, TriangleAlert, X } from "lucide-react";
 import { formatTime } from "../features/chat/format";
 import type { ChatMessage } from "../features/chat/messageTypes";
@@ -30,7 +31,6 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, o
 
   return (
     <div className={clsx("kuno-message-enter flex w-full min-w-0 gap-2.5", mine ? "justify-end" : "justify-start")}>
-      {/* Peer avatar */}
       {!mine ? (
         <div className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-border bg-surface text-[10px] font-bold text-muted shadow-card">
           {message.senderName.trim().charAt(0).toUpperCase() || "P"}
@@ -38,32 +38,33 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, o
       ) : null}
 
       <div className={clsx("flex min-w-0 max-w-[82%] flex-col", mine ? "items-end" : "items-start", isAsset ? "w-[248px]" : "")}>
-        {/* Text bubble */}
-        {message.kind === "text" && message.text ? (
-          <div
+        {message.kind === "text" && message.text ? <TextBubble text={message.text.text} mine={mine} /> : null}
+
+        {message.kind === "link" && message.link ? (
+          <a
+            href={message.link.url}
+            target="_blank"
+            rel="noreferrer"
             className={clsx(
-              "max-w-full break-words rounded-[12px] px-3.5 py-2.5 text-[13px] leading-[1.55] shadow-card",
-              mine
-                ? "bg-accent text-white shadow-[0_8px_24px_var(--accent-glow)]"
-                : "border border-border bg-surface text-text dark:bg-surface"
+              "max-w-full break-words rounded-[12px] px-3.5 py-2.5 text-[13px] leading-[1.55] shadow-card underline-offset-2 hover:underline",
+              mine ? "bg-accent text-white shadow-[0_8px_24px_var(--accent-glow)]" : "border border-border bg-surface text-accent"
             )}
           >
-            {message.text.text}
-          </div>
+            <span className="block text-[11px] opacity-75">{message.link.host}</span>
+            {message.link.url}
+          </a>
         ) : null}
 
-        {/* Image */}
+        {message.kind === "code" && message.code ? (
+          <pre className="max-w-full overflow-x-auto rounded-[12px] border border-border bg-surface px-3.5 py-2.5 text-left font-mono text-[12px] leading-[1.55] text-text shadow-card">
+            <code>{message.code.code}</code>
+          </pre>
+        ) : null}
+
         {message.kind === "image" && message.asset ? (
-          <ImageCard
-            asset={message.asset}
-            status={message.status}
-            progress={message.progress}
-            variant="message"
-            onDownload={canDownload ? () => onDownload?.(message.id) : undefined}
-          />
+          <ImageCard asset={message.asset} status={message.status} progress={message.progress} variant="message" onDownload={canDownload ? () => onDownload?.(message.id) : undefined} />
         ) : null}
 
-        {/* File */}
         {message.kind === "file" && message.asset ? (
           <FileCard
             asset={message.asset}
@@ -78,74 +79,46 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, o
           />
         ) : null}
 
-        {/* Bundle */}
-        {message.kind === "bundle" && message.bundle ? (
-          <BundleCard bundle={message.bundle} status={message.status} />
-        ) : null}
+        {message.kind === "bundle" && message.bundle ? <BundleCard bundle={message.bundle} status={message.status} /> : null}
 
-        {/* System message */}
         {message.kind === "system" ? (
           <div className="max-w-full break-words rounded-pill border border-border bg-surface/80 px-3 py-1.5 text-[11px] text-muted shadow-card backdrop-blur-[8px]">
             {message.text?.text ?? "System update"}
           </div>
         ) : null}
 
-        {/* Meta row: time + status + actions */}
         <div className={clsx("mt-1 flex max-w-full flex-wrap items-center gap-1 text-[10px] text-faint", mine ? "mr-1 justify-end" : "ml-1")}>
           <span>{formatTime(message.createdAt)}</span>
           {mine ? <MessageStatusIcon message={message} /> : null}
-          {canPause ? (
-            <ActionButton
-              id={`pause-${message.id}`}
-              label="転送を一時停止"
-              icon={<Pause className="h-3 w-3" />}
-              text="一時停止"
-              onClick={() => onPause?.(message.id)}
-              variant="muted"
-            />
-          ) : null}
-          {canResume ? (
-            <ActionButton
-              id={`resume-${message.id}`}
-              label="転送を再開"
-              icon={<Play className="h-3 w-3" />}
-              text="再開"
-              onClick={() => onResume?.(message.id)}
-              variant="accent"
-            />
-          ) : null}
+          {canPause ? <ActionButton id={`pause-${message.id}`} label="転送を一時停止" icon={<Pause className="h-3 w-3" />} text="一時停止" onClick={() => onPause?.(message.id)} variant="muted" /> : null}
+          {canResume ? <ActionButton id={`resume-${message.id}`} label="転送を再開" icon={<Play className="h-3 w-3" />} text="再開" onClick={() => onResume?.(message.id)} variant="accent" /> : null}
           {canDownload ? (
             <ActionButton
               id={`download-${message.id}`}
-              label={message.status === "failed" ? "転送を再開" : "ファイルをダウンロード"}
+              label={message.status === "failed" ? "転送を再開" : "ファイルを保存"}
               icon={<Play className="h-3 w-3" />}
               text={message.status === "failed" ? "再開" : "保存"}
               onClick={() => onDownload?.(message.id)}
               variant="accent"
             />
           ) : null}
-          {canCancel ? (
-            <ActionButton
-              id={`cancel-${message.id}`}
-              label="送信をキャンセル"
-              icon={<X className="h-3 w-3" />}
-              text="取消"
-              onClick={() => onCancel?.(message.id)}
-              variant="muted"
-            />
-          ) : null}
-          {canRetry ? (
-            <ActionButton
-              id={`retry-${message.id}`}
-              label="再送する"
-              icon={<RotateCcw className="h-3 w-3" />}
-              text="再送"
-              onClick={() => onRetry?.(message.id)}
-              variant="danger"
-            />
-          ) : null}
+          {canCancel ? <ActionButton id={`cancel-${message.id}`} label="送信をキャンセル" icon={<X className="h-3 w-3" />} text="取消" onClick={() => onCancel?.(message.id)} variant="muted" /> : null}
+          {canRetry ? <ActionButton id={`retry-${message.id}`} label="再送する" icon={<RotateCcw className="h-3 w-3" />} text="再送" onClick={() => onRetry?.(message.id)} variant="danger" /> : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+function TextBubble({ text, mine }: { text: string; mine: boolean }) {
+  return (
+    <div
+      className={clsx(
+        "max-w-full break-words rounded-[12px] px-3.5 py-2.5 text-[13px] leading-[1.55] shadow-card",
+        mine ? "bg-accent text-white shadow-[0_8px_24px_var(--accent-glow)]" : "border border-border bg-surface text-text dark:bg-surface"
+      )}
+    >
+      {text}
     </div>
   );
 }
@@ -153,7 +126,7 @@ export function MessageBubble({ message, onRetry, onCancel, onPause, onResume, o
 type ActionButtonProps = {
   id: string;
   label: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   text: string;
   onClick: () => void;
   variant: "muted" | "accent" | "danger";

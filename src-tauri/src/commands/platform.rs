@@ -46,6 +46,11 @@ pub async fn register_app_shortcuts(_app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn set_app_shortcut(app: AppHandle, shortcut: String) -> Result<(), String> {
+    crate::native::shortcuts::register_shortcut(&app, &shortcut)
+}
+
+#[tauri::command]
 pub async fn set_launch_at_login(app: AppHandle, enabled: bool) -> Result<(), String> {
     let _note = crate::native::autostart::AUTOSTART_NOTE;
     let autostart = app.autolaunch();

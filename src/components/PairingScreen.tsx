@@ -45,10 +45,9 @@ export function PairingScreen({
 }: PairingScreenProps) {
   const [friendCode, setFriendCode] = useState("");
   const [copied, setCopied] = useState(false);
-  const hasPeerTarget = detectedPeers.length > 0 || Boolean(selectedPeerId);
-  const canConnect = friendCode.replace(/\D/g, "").length === 6;
+  const canConnect = pairingDigits(friendCode).length === 6;
   const isConnecting = status === "connecting" || status === "reconnecting";
-  const canSubmitCode = canConnect && hasPeerTarget && !isConnecting;
+  const canSubmitCode = canConnect && !isConnecting;
   const isConnected = status === "connected";
   const hasFailed = status === "failed";
 
@@ -61,7 +60,7 @@ export function PairingScreen({
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (canSubmitCode) {
-      onConnect(friendCode);
+      onConnect(pairingDigits(friendCode));
     }
   }
 
@@ -97,8 +96,8 @@ export function PairingScreen({
                 {isConnected
                   ? `${peerDisplayName || "相手"} と接続済みです。すぐに送信できます。`
                   : hasFailed
-                    ? "相手PCのKunoChatが起動していることと、同じネットワークにいることを確認してください。"
-                    : "見つかった相手を選ぶと接続します。コードは相手確認用です。"}
+                    ? "相手PCでKunoChatが起動していることと、同じネットワークにいることを確認してください。"
+                    : `${displayName}として待機中です。見つかった相手を選ぶか、相手の6桁コードを入力してください。`}
               </p>
             </div>
           </div>
@@ -112,8 +111,8 @@ export function PairingScreen({
               <button
                 type="button"
                 id="copy-pairing-code-btn"
-                aria-label="ペアリングコードをコピー"
-                title="コードをコピー"
+                aria-label={copied ? "コピーしました" : "ペアリングコードをコピー"}
+                title={copied ? "コピーしました" : "コードをコピー"}
                 onClick={handleCopyCode}
                 className={clsx(
                   "kuno-focus-ring grid h-8 w-8 shrink-0 place-items-center rounded-full border transition-colors",
@@ -123,7 +122,9 @@ export function PairingScreen({
                 {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
               </button>
             </div>
-            <p className="mt-2 text-[11px] text-muted">相手にこの6桁を伝えてください。</p>
+            <p className="mt-2 text-[11px] text-muted" aria-live="polite">
+              {copied ? "コードをコピーしました。" : "相手にこの6桁を伝えてください。"}
+            </p>
           </section>
 
           <section className="mt-6" aria-labelledby="detected-devices-label">
@@ -176,7 +177,7 @@ export function PairingScreen({
               placeholder="000-000"
               autoComplete="off"
               inputMode="numeric"
-              maxLength={7}
+              maxLength={32}
               className="kuno-focus-ring mt-2 h-11 w-full rounded-input border border-border bg-surface px-3 font-mono text-[15px] tracking-[0.14em] text-text outline-none transition-colors placeholder:text-faint focus:border-accent focus:shadow-[0_0_0_3px_var(--accent-soft)]"
             />
             <button
@@ -190,7 +191,7 @@ export function PairingScreen({
             </button>
           </form>
 
-          <p className="mt-4 text-[11px] leading-5 text-muted">{pairingHelpText(status, signalingConfigured, hasPeerTarget, signalingUrl)}</p>
+          <p className="mt-4 text-[11px] leading-5 text-muted">{pairingHelpText(status, signalingConfigured, detectedPeers.length > 0 || Boolean(selectedPeerId), signalingUrl)}</p>
           <p className="mt-2 text-[11px] leading-5 text-faint">一度接続した相手はチャット一覧に残ります。次回からは相手を選ぶだけで送信できます。</p>
         </div>
       </div>
@@ -210,8 +211,12 @@ function PairingStatus({ status }: { status: ConnectionStatus }) {
   );
 }
 
+function pairingDigits(value: string): string {
+  return value.normalize("NFKC").replace(/\D/g, "").slice(0, 6);
+}
+
 function formatPairingCode(value: string): string {
-  const digits = value.replace(/\D/g, "").slice(0, 6);
+  const digits = pairingDigits(value);
   return digits.length > 3 ? `${digits.slice(0, 3)}-${digits.slice(3)}` : digits;
 }
 
@@ -227,7 +232,7 @@ function pairingHelpText(status: ConnectionStatus, signalingConfigured: boolean,
   if (!signalingConfigured) return "接続サービスを初期化できませんでした。アプリを再起動してください。";
   if (status === "connected") return "接続の準備が完了しました。";
   if (status === "failed") return "接続できませんでした。同じネットワークか、相手PCのKunoChatが開いているか確認してください。";
-  if (!hasPeerTarget) return "6桁コードだけでは相手PCを特定できません。まず相手PCが見つかった相手に表示されるのを待ってください。";
   if (status === "connecting" || status === "reconnecting") return "相手PCへ接続しています。時間がかかる場合は接続先を選び直してください。";
-  return "相手を選ぶか、見つかった相手がある状態でコードを入力してください。";
+  if (!hasPeerTarget) return "相手が見つからない場合でも、6桁コードを入力して接続を試せます。";
+  return "相手を選ぶか、相手のコードを入力してください。";
 }

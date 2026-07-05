@@ -4,8 +4,15 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 pub const SHOW_HIDE_SHORTCUT: &str = "CommandOrControl+Shift+Space";
 
 pub fn register(app: &AppHandle) -> Result<(), String> {
-    if let Err(error) = app.global_shortcut()
-        .on_shortcut(SHOW_HIDE_SHORTCUT, |app, _shortcut, event| {
+    register_shortcut(app, SHOW_HIDE_SHORTCUT)
+}
+
+pub fn register_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), String> {
+    let shortcut = normalize_shortcut(shortcut);
+    let manager = app.global_shortcut();
+    let _ = manager.unregister_all();
+    if let Err(error) = manager
+        .on_shortcut(shortcut.as_str(), |app, _shortcut, event| {
             if event.state() == ShortcutState::Pressed {
                 if let Some(window) = app.get_webview_window("main") {
                     let visible = window.is_visible().unwrap_or(false);
@@ -20,8 +27,18 @@ pub fn register(app: &AppHandle) -> Result<(), String> {
             }
         })
     {
-        eprintln!("KunoChat could not register global shortcut {SHOW_HIDE_SHORTCUT}: {error}");
+        eprintln!("KunoChat could not register global shortcut {shortcut}: {error}");
+        return Err(error.to_string());
     }
 
     Ok(())
+}
+
+fn normalize_shortcut(shortcut: &str) -> String {
+    let compact = shortcut.split_whitespace().collect::<String>();
+    if compact.is_empty() {
+        SHOW_HIDE_SHORTCUT.to_string()
+    } else {
+        compact
+    }
 }

@@ -291,7 +291,13 @@ export function App() {
           });
         }
       },
-      onPeer: (peer) => updateSettings({ peerDisplayName: peer.displayName }),
+      onPeer: (peer) => {
+        updateSettings({ peerDisplayName: peer.displayName });
+        activateConversation({
+          peerId: peer.peerId,
+          displayName: peer.displayName
+        });
+      },
       onIdentity: (identity) => {
         if (identity.status === "mismatch") {
           setDiagnostic({
@@ -328,6 +334,7 @@ export function App() {
           size: asset.size,
           mime: asset.mime,
           sha256: asset.sha256,
+          caption: asset.caption,
           thumbnail: asset.thumbnail,
           isFolder: asset.isFolder
         });
@@ -703,6 +710,9 @@ export function App() {
     }
     if (typeof nextSettings.launchAtLogin === "boolean") {
       void platformAdapter.setAutostart(nextSettings.launchAtLogin);
+    }
+    if (typeof nextSettings.shortcut === "string") {
+      void platformAdapter.setAppShortcut(nextSettings.shortcut);
     }
   }
 
@@ -1293,6 +1303,7 @@ export function App() {
           <ConnectionBanner
             diagnostic={diagnostic}
             status={connectionStatus}
+            canRetry={Boolean(lastAutoConnect)}
             onPair={() => setView("pairing")}
             onRetry={handleRetryAutoConnect}
           />
@@ -1327,7 +1338,7 @@ export function App() {
 }
 
 async function sendRealtimeMessage(message: ChatMessage) {
-  if (message.kind === "text" && message.text) {
+  if ((message.kind === "text" || message.kind === "link" || message.kind === "code") && message.text) {
     realtimeClient.sendText({
       id: message.id,
       senderId: message.senderId,
@@ -1616,11 +1627,13 @@ function ConnectionRequestBanner({
 function ConnectionBanner({
   diagnostic,
   status,
+  canRetry,
   onPair,
   onRetry
 }: {
   diagnostic?: ConnectionDiagnostic;
   status: ConnectionStatus;
+  canRetry: boolean;
   onPair: () => void;
   onRetry: () => void;
 }) {
@@ -1628,7 +1641,7 @@ function ConnectionBanner({
     return null;
   }
 
-  const activeDiagnostic = diagnostic ?? reconnectDiagnostic(status);
+  const activeDiagnostic = diagnostic ?? reconnectDiagnostic(status, canRetry);
   const toneClass =
     activeDiagnostic.tone === "danger"
       ? "border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-950/30 dark:text-red-200"
@@ -1644,11 +1657,13 @@ function ConnectionBanner({
           <div className="mt-0.5 break-words text-[11px] leading-4 opacity-90">{activeDiagnostic.detail}</div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <button type="button" onClick={onRetry} className="kuno-focus-ring min-h-8 rounded-input bg-white/80 px-3 py-1.5 text-[12px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
-            再接続
-          </button>
+          {canRetry ? (
+            <button type="button" onClick={onRetry} className="kuno-focus-ring min-h-8 rounded-input bg-white/80 px-3 py-1.5 text-[12px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
+              前回の相手に再接続
+            </button>
+          ) : null}
           <button type="button" onClick={onPair} className="kuno-focus-ring min-h-8 rounded-input bg-white/80 px-3 py-1.5 text-[12px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
-            接続先を選ぶ
+            {canRetry ? "別の相手を選ぶ" : "接続先を選ぶ"}
           </button>
         </div>
       </div>
@@ -1656,19 +1671,23 @@ function ConnectionBanner({
   );
 }
 
-function reconnectDiagnostic(status: ConnectionStatus): ConnectionDiagnostic {
+function reconnectDiagnostic(status: ConnectionStatus, canRetry: boolean): ConnectionDiagnostic {
   if (status === "connecting" || status === "reconnecting") {
     return {
       tone: "warning",
       title: "再接続中",
-      detail: "前回の接続先へ接続しています。別の相手に繋ぐ場合は「接続先を選ぶ」を押してください。"
+      detail: canRetry
+        ? "前回の接続先へ接続しています。別の相手に繋ぐ場合は「別の相手を選ぶ」を押してください。"
+        : "接続先を探しています。相手が表示されない場合は「接続先を選ぶ」を押してください。"
     };
   }
   if (status === "failed" || status === "offline") {
     return {
       tone: "warning",
       title: "接続が切れています",
-      detail: "同じ相手へ戻すなら「再接続」、別のPCへ繋ぐなら「接続先を選ぶ」を押してください。"
+      detail: canRetry
+        ? "同じ相手へ戻すなら「前回の相手に再接続」、別のPCへ繋ぐなら「別の相手を選ぶ」を押してください。"
+        : "接続したい相手を選んでください。相手がオフラインでもメッセージは送信待ちにできます。"
     };
   }
   return {

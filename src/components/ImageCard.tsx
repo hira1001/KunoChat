@@ -24,8 +24,8 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
   const previewUrl = localPreviewUrl ?? storedPreviewUrl ?? asset.thumbnail;
   const isThumbnailOnly = !localPreviewUrl && !storedPreviewUrl && Boolean(asset.thumbnail);
   const canOpen = Boolean(openPath) && (status === "sent" || status === "received" || status === "saved");
-
   const isDownloadPending = status === "queued" && Boolean(onDownload);
+
   const handleOpen = () => {
     if (openPath) {
       void platformAdapter.openPath(openPath);
@@ -34,24 +34,22 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
 
   return (
     <div className="group w-full min-w-0 max-w-full overflow-hidden rounded-card border border-border bg-surface shadow-card transition-all duration-200 hover:shadow-window">
-      {/* Image preview */}
-      <div className="relative aspect-[2.55] overflow-hidden bg-surface-active">
+      <div className="relative flex min-h-[132px] max-h-[320px] items-center justify-center overflow-hidden bg-surface-active">
         {previewUrl ? (
           <>
             <img
               src={previewUrl}
               alt={asset.name}
               className={clsx(
-                "h-full w-full object-cover transition-all duration-500",
+                "max-h-[320px] w-full object-contain transition-all duration-500",
                 isActive || isThumbnailOnly ? "scale-[1.02] blur-[8px]" : "scale-100 blur-0"
               )}
             />
-            {/* Zoom hint on hover */}
             {canOpen ? (
               <button
                 type="button"
                 onClick={handleOpen}
-                aria-label={`${asset.name} を開く`}
+                aria-label={`${asset.name}を開く`}
                 className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/20 group-hover:opacity-100"
               >
                 <ZoomIn className="h-6 w-6 text-white drop-shadow-lg" />
@@ -59,19 +57,18 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
             ) : null}
           </>
         ) : (
-          <div className="grid h-full place-items-center text-faint">
+          <div className="grid h-full min-h-[132px] place-items-center text-faint">
             <ImageIcon className="h-8 w-8 animate-pulse" />
           </div>
         )}
 
-        {/* Overlay download button centered on preview */}
         {isDownloadPending ? (
           <div className="absolute inset-0 flex items-center justify-center bg-black/20 backdrop-blur-[1px] transition-all duration-200">
             <button
               type="button"
-              aria-label="画像ダウンロードを開始"
+              aria-label="画像のダウンロードを開始"
               onClick={onDownload}
-              className="kuno-focus-ring flex items-center gap-1.5 rounded-input border border-accent bg-accent px-3.5 py-1.5 text-[11px] font-bold text-white shadow-lg transition-all duration-150 hover:bg-accent-hover hover:scale-105 active:scale-95"
+              className="kuno-focus-ring flex items-center gap-1.5 rounded-input border border-accent bg-accent px-3.5 py-1.5 text-[11px] font-bold text-white shadow-lg transition-all duration-150 hover:scale-105 hover:bg-accent-hover active:scale-95"
             >
               <Play className="h-3.5 w-3.5 fill-current" />
               ダウンロード ({formatBytes(asset.size)})
@@ -79,7 +76,6 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
           </div>
         ) : null}
 
-        {/* Overlay progress during transfer */}
         {isActive && typeof activeProgress === "number" ? (
           <div className="absolute inset-0 flex items-end bg-gradient-to-t from-black/50 to-transparent pb-3 pl-3 pr-3">
             <div className="w-full">
@@ -112,12 +108,11 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
         </div>
       ) : null}
 
-      {/* Footer (card variant only) */}
       {!messageVariant ? (
         <div className="px-3 py-2.5">
           <div className="flex min-w-0 items-center justify-between gap-3">
             <div className="min-w-0 flex-1 overflow-hidden">
-              <div className="truncate text-[13px] font-semibold tracking-[-0.01em] text-text">{asset.name}</div>
+              <div className="truncate text-[13px] font-semibold text-text">{asset.name}</div>
               <div className="mt-0.5 text-[11px] text-muted">{formatBytes(asset.size)}</div>
             </div>
             <button
@@ -132,10 +127,7 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
         </div>
       ) : null}
 
-      {/* Done indicator line */}
-      {isDone && messageVariant ? (
-        <div className="h-0.5 bg-gradient-to-r from-success/60 to-success" />
-      ) : null}
+      {isDone && messageVariant ? <div className="h-0.5 bg-gradient-to-r from-success/60 to-success" /> : null}
     </div>
   );
 }

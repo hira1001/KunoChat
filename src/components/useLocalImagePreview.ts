@@ -15,12 +15,6 @@ export function useLocalImagePreview(path: string | undefined, mime: string | un
       return undefined;
     }
 
-    const directUrl = platformAdapter.filePreviewUrl(path, mime);
-    if (directUrl) {
-      setPreviewUrl(directUrl);
-      return undefined;
-    }
-
     void platformAdapter.createImagePreviewUrl(path, mime, maxPreviewBytes).then((url) => {
       if (cancelled) {
         if (url) {
@@ -28,8 +22,12 @@ export function useLocalImagePreview(path: string | undefined, mime: string | un
         }
         return;
       }
-      objectUrl = url;
-      setPreviewUrl(url);
+      if (url) {
+        objectUrl = url;
+        setPreviewUrl(url);
+        return;
+      }
+      setPreviewUrl(platformAdapter.filePreviewUrl(path, mime));
     });
 
     return () => {

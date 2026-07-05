@@ -1,7 +1,7 @@
 mod commands;
 mod native;
 
-use commands::{fs, identity, notification, opener, platform, transfer_session, window};
+use commands::{fs, identity, notification, opener, platform, transfer_session, updater, window};
 use tauri::{Manager, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -86,10 +86,12 @@ pub fn run() {
             native::transfer::send_native_file,
             opener::open_path,
             opener::reveal_path,
+            updater::download_and_open_installer,
             notification::notify_message,
             notification::notify_file_received,
             platform::get_platform_info,
             platform::register_app_shortcuts,
+            platform::set_app_shortcut,
             platform::set_launch_at_login
         ])
         .run(tauri::generate_context!())

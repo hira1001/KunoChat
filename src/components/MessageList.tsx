@@ -1,7 +1,7 @@
-import type { ChatMessage, ConnectionStatus } from "../features/chat/messageTypes";
-import { MessageBubble } from "./MessageBubble";
 import { useEffect, useRef } from "react";
 import { MessageSquareDashed, Wifi } from "lucide-react";
+import type { ChatMessage, ConnectionStatus } from "../features/chat/messageTypes";
+import { MessageBubble } from "./MessageBubble";
 
 type MessageListProps = {
   messages: ChatMessage[];
@@ -31,6 +31,7 @@ export function MessageList({
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldStickToBottomRef = useRef(true);
   const isConnected = connectionStatus === "connected";
+  const hasContent = messages.length > 0 || showTyping;
 
   useEffect(() => {
     if (!scrollRef.current || !shouldStickToBottomRef.current) return;
@@ -50,7 +51,7 @@ export function MessageList({
       onScroll={handleScroll}
       className="kuno-scrollbar flex min-h-0 w-full min-w-0 max-w-full flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden px-3.5 py-4"
     >
-      {messages.length > 0 ? (
+      {hasContent ? (
         <div className="flex justify-center">
           <span className="rounded-pill bg-surface-hover px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-faint">
             Today
@@ -58,7 +59,7 @@ export function MessageList({
         </div>
       ) : null}
 
-      {messages.length === 0 ? (
+      {messages.length === 0 && !showTyping ? (
         <EmptyState isConnected={isConnected} onPair={onPair} />
       ) : (
         <>
@@ -85,19 +86,11 @@ function EmptyState({ isConnected, onPair }: { isConnected: boolean; onPair?: ()
     <div className="flex w-full min-w-0 flex-1 items-center justify-center px-2 text-center">
       <div className="kuno-fade-in mx-auto w-full max-w-[280px] px-5 py-6">
         <div className="mx-auto grid h-11 w-11 place-items-center rounded-card border border-accent/10 bg-accent-soft">
-          {isConnected ? (
-            <MessageSquareDashed className="h-6 w-6 text-accent" />
-          ) : (
-            <Wifi className="h-6 w-6 text-faint" />
-          )}
+          {isConnected ? <MessageSquareDashed className="h-6 w-6 text-accent" /> : <Wifi className="h-6 w-6 text-faint" />}
         </div>
-        <div className="mt-3 text-[15px] font-semibold text-text">
-          {isConnected ? "何か送ってみましょう" : "未接続でも送信待ちにできます"}
-        </div>
+        <div className="mt-3 text-[15px] font-semibold text-text">{isConnected ? "何か送ってみましょう" : "未接続でも送信待ちにできます"}</div>
         <div className="mx-auto mt-1.5 max-w-[220px] text-[12px] leading-[1.6] text-muted">
-          {isConnected
-            ? "テキストを入力するか、ファイルをここにドロップしてください。"
-            : "メッセージやファイルはこのPCに保存され、相手を選ぶと自動送信されます。"}
+          {isConnected ? "テキストを入力するか、ファイルをここにドロップしてください。" : "メッセージやファイルはこのPCに保存され、相手を選ぶと自動送信されます。"}
         </div>
         {!isConnected && onPair ? (
           <button

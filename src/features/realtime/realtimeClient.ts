@@ -24,6 +24,7 @@ type ServerSignal =
 type LocalRealtimeMessage =
   | { type: "hello"; roomId: string; peerId: string; displayName: string }
   | { type: "welcome"; roomId: string; peerId: string; displayName: string }
+  | { type: "leave"; roomId: string; peerId: string }
   | { type: "control"; roomId: string; peerId: string; message: RealtimeControlMessage }
   | { type: "asset"; roomId: string; peerId: string; meta: RealtimeAssetMeta; blob: Blob };
 
@@ -194,6 +195,7 @@ class KunoRealtimeClient {
   private identity?: IdentityHandshake;
   private localChannel?: BroadcastChannel;
   private localConnected = false;
+  private localUnloadHandler?: () => void;
 
   configure(callbacks: RealtimeCallbacks) {
     this.callbacks = callbacks;
@@ -260,8 +262,14 @@ class KunoRealtimeClient {
       this.socket.onmessage = null;
     }
     if (this.localChannel) {
+      this.postLocalLeave();
       this.localChannel.onmessage = null;
       this.localChannel.close();
+    }
+    if (this.localUnloadHandler) {
+      window.removeEventListener("pagehide", this.localUnloadHandler);
+      window.removeEventListener("beforeunload", this.localUnloadHandler);
+      this.localUnloadHandler = undefined;
     }
     if (this.peer) {
       this.peer.onconnectionstatechange = null;
@@ -414,6 +422,9 @@ class KunoRealtimeClient {
 
     const channel = new BroadcastChannel(`kunochat-local-room-${this.options.roomId}`);
     this.localChannel = channel;
+    this.localUnloadHandler = () => this.postLocalLeave();
+    window.addEventListener("pagehide", this.localUnloadHandler);
+    window.addEventListener("beforeunload", this.localUnloadHandler);
 
     channel.onmessage = (event) => {
       void this.handleLocalMessage(event.data as LocalRealtimeMessage);
@@ -457,6 +468,14 @@ class KunoRealtimeClient {
       return;
     }
 
+    if (message.type === "leave") {
+      this.localConnected = false;
+      this.stopHeartbeat();
+      this.callbacks?.onStatus(this.manualDisconnect ? "offline" : "reconnecting");
+      this.scheduleReconnect();
+      return;
+    }
+
     if (message.type === "control") {
       this.handleControl(undefined, message.message);
       return;
@@ -497,6 +516,21 @@ class KunoRealtimeClient {
       throw new Error("Local channel is not open.");
     }
     this.localChannel.postMessage(message);
+  }
+
+  private postLocalLeave() {
+    if (!this.localChannel || !this.options) {
+      return;
+    }
+    try {
+      this.localChannel.postMessage({
+        type: "leave",
+        roomId: this.options.roomId,
+        peerId: this.options.localPeerId
+      } satisfies LocalRealtimeMessage);
+    } catch {
+      // The browser may already be tearing down the page.
+    }
   }
 
   private async sendLocalAsset(meta: RealtimeAssetMeta, source: File | RealtimeBinarySource) {

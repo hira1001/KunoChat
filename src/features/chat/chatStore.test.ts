@@ -187,6 +187,16 @@ describe("chatStore", () => {
     expect(useChatStore.getState().messages[0]).toMatchObject({ status: "sent", error: undefined });
   });
 
+  test("creates link and code messages from text drafts", async () => {
+    useChatStore.setState({ connectionStatus: "connected", draftText: "https://kuno.chat/path" });
+    await useChatStore.getState().sendDraft(vi.fn());
+    expect(useChatStore.getState().messages[0]).toMatchObject({ kind: "link", link: { host: "kuno.chat" } });
+
+    useChatStore.setState({ draftText: "const value = 1;\nconsole.log(value);" });
+    await useChatStore.getState().sendDraft(vi.fn());
+    expect(useChatStore.getState().messages[1]).toMatchObject({ kind: "code", code: { language: "javascript" } });
+  });
+
   test("queues file attachments while disconnected", async () => {
     useChatStore.setState({ attachments: [attachment({ id: "file_1", localPath: "/tmp/doc.pdf" })] });
     await useChatStore.getState().sendDraft();
@@ -420,6 +430,44 @@ describe("chatStore", () => {
     expect(useChatStore.getState().messages[0].asset?.sha256).toBe("abc");
   });
 
+  test("receives captioned image as a bundle", () => {
+    useChatStore.getState().receivePeerAsset({
+      id: "asset_bundle",
+      transferId: "tr_img",
+      senderId: "peer",
+      senderName: "Taro",
+      createdAt: 1,
+      kind: "image",
+      name: "image.png",
+      size: 42,
+      mime: "image/png",
+      caption: "お金増えた",
+      thumbnail: "data:image/png;base64,abc"
+    });
+
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      kind: "bundle",
+      bundle: {
+        caption: "お金増えた",
+        count: 1,
+        totalSize: 42,
+        items: [{ name: "image.png", transferId: "tr_img", previewUrl: "data:image/png;base64,abc" }]
+      }
+    });
+  });
+
+  test("appends incoming bundle assets without overwriting earlier files", () => {
+    const base = { id: "asset_bundle", senderId: "peer", senderName: "Taro", createdAt: 1, kind: "file" as const, mime: "application/pdf", caption: "確認して" };
+    useChatStore.getState().receivePeerAsset({ ...base, transferId: "tr_1", name: "a.pdf", size: 10 });
+    useChatStore.getState().receivePeerAsset({ ...base, transferId: "tr_2", name: "b.pdf", size: 20 });
+
+    const bundle = useChatStore.getState().messages[0].bundle;
+    expect(bundle?.caption).toBe("確認して");
+    expect(bundle?.count).toBe(2);
+    expect(bundle?.totalSize).toBe(30);
+    expect(bundle?.items.map((item) => item.name)).toEqual(["a.pdf", "b.pdf"]);
+  });
+
   test("updates transfer progress on message and state", () => {
     useChatStore.getState().receivePeerAsset({ id: "asset_msg", transferId: "tr_1", senderId: "peer", senderName: "Taro", createdAt: 1, kind: "file", name: "a.pdf", size: 42, mime: "application/pdf" });
     useChatStore.getState().updateTransferProgress({ messageId: "asset_msg", transferId: "tr_1", progress: 55 });
@@ -443,6 +491,20 @@ describe("chatStore", () => {
     useChatStore.getState().receivePeerAsset({ id: "asset_msg", transferId: "tr_1", senderId: "peer", senderName: "Taro", createdAt: 1, kind: "file", name: "a.pdf", size: 42, mime: "application/pdf" });
     useChatStore.getState().completeTransfer({ messageId: "asset_msg", transferId: "tr_1", savePath: "/tmp/a.pdf" });
     expect(useChatStore.getState().messages[0]).toMatchObject({ status: "received", progress: 100, asset: { savePath: "/tmp/a.pdf" } });
+  });
+
+  test("keeps bundle receiving until every item completes", () => {
+    const base = { id: "asset_bundle", senderId: "peer", senderName: "Taro", createdAt: 1, kind: "image" as const, mime: "image/png", caption: "images" };
+    useChatStore.getState().receivePeerAsset({ ...base, transferId: "tr_1", name: "a.png", size: 10 });
+    useChatStore.getState().receivePeerAsset({ ...base, transferId: "tr_2", name: "b.png", size: 20 });
+    useChatStore.getState().updateTransferProgress({ messageId: "asset_bundle", transferId: "tr_1", progress: 50 });
+    expect(useChatStore.getState().messages[0].bundle?.items[0].progress).toBe(50);
+
+    useChatStore.getState().completeTransfer({ messageId: "asset_bundle", transferId: "tr_1", savePath: "/tmp/a.png" });
+    expect(useChatStore.getState().messages[0].status).toBe("receiving");
+
+    useChatStore.getState().completeTransfer({ messageId: "asset_bundle", transferId: "tr_2", savePath: "/tmp/b.png" });
+    expect(useChatStore.getState().messages[0]).toMatchObject({ status: "received", progress: 100 });
   });
 
   test("does not persist expired blob preview URLs", () => {

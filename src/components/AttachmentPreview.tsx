@@ -14,21 +14,12 @@ export function AttachmentPreview({ attachments, onRemove }: AttachmentPreviewPr
     return null;
   }
 
-  const visible = attachments.slice(0, 4);
-  const remaining = attachments.length - visible.length;
-
   return (
     <div className="kuno-fade-in w-full min-w-0 max-w-full overflow-hidden border-t border-border bg-bg-glass px-3 py-2.5 backdrop-blur-[16px]">
       <div className="kuno-scrollbar flex max-w-full gap-2 overflow-x-auto overflow-y-hidden pb-1">
-        {visible.map((attachment) => (
+        {attachments.map((attachment) => (
           <AttachmentPreviewItem key={attachment.id} attachment={attachment} onRemove={onRemove} />
         ))}
-
-        {remaining > 0 ? (
-          <div className="flex h-[84px] w-[88px] shrink-0 items-center justify-center rounded-card border border-dashed border-border bg-surface text-[12px] font-semibold text-muted">
-            +{remaining}
-          </div>
-        ) : null}
       </div>
     </div>
   );
@@ -55,7 +46,7 @@ function AttachmentPreviewItem({ attachment, onRemove }: AttachmentPreviewItemPr
       </button>
 
       {previewUrl ? (
-        <img src={previewUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
+        <img src={previewUrl} alt="" className="absolute inset-0 h-full w-full bg-surface-active object-contain" />
       ) : (
         <div
           className={clsx(
@@ -67,9 +58,9 @@ function AttachmentPreviewItem({ attachment, onRemove }: AttachmentPreviewItemPr
         </div>
       )}
 
-      <div className="relative z-10 bg-gradient-to-t from-black/50 to-transparent px-2 pb-2 pt-4">
+      <div className="relative z-10 bg-gradient-to-t from-black/55 to-transparent px-2 pb-2 pt-4">
         <span className="block max-w-full truncate text-[10px] font-medium text-white drop-shadow">{attachment.name}</span>
-        <span className="block max-w-full truncate text-[9px] text-white/70 drop-shadow">{formatBytes(attachment.size)}</span>
+        <span className="block max-w-full truncate text-[9px] text-white/80 drop-shadow">{formatBytes(attachment.size)}</span>
       </div>
     </div>
   );

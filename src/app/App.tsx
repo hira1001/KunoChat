@@ -70,6 +70,16 @@ function signalingUrlForPeer(peerHint: string): string | undefined {
   return host.includes(":") && !host.startsWith("[") ? `ws://[${host}]:8787` : `ws://${host}:8787`;
 }
 
+function signalingUrlForDetectedPeer(peer: AutoConnectPayload): string | undefined {
+  if (peer.signalingUrl === LOCAL_BROWSER_SIGNALING_URL) {
+    return LOCAL_BROWSER_SIGNALING_URL;
+  }
+  if (peer.mode === "join") {
+    return peer.signalingUrl;
+  }
+  return signalingUrlForPeer(peer.peerHint) ?? peer.signalingUrl;
+}
+
 type NativeTransferEvent = {
   messageId: string;
   transferId: string;
@@ -896,12 +906,7 @@ export function App() {
       setView("pairing");
       return;
     }
-    const detectedPeerUrl =
-      selectedPeer?.signalingUrl === LOCAL_BROWSER_SIGNALING_URL
-        ? LOCAL_BROWSER_SIGNALING_URL
-        : selectedPeer?.peerHint
-          ? signalingUrlForPeer(selectedPeer.peerHint)
-          : undefined;
+    const detectedPeerUrl = selectedPeer ? signalingUrlForDetectedPeer(selectedPeer) : undefined;
     if (selectedPeer) {
       activateConversation({
         peerId: selectedPeer.peerHint,
@@ -936,7 +941,7 @@ export function App() {
     }
     const isLocalBrowserPeer = peer.signalingUrl === LOCAL_BROWSER_SIGNALING_URL;
     const roomId = isLocalBrowserPeer ? peer.roomId : createPairingCode();
-    const signalingUrl = signalingUrlForPeer(peer.peerHint) ?? peer.signalingUrl;
+    const signalingUrl = signalingUrlForDetectedPeer(peer) ?? peer.signalingUrl;
     const requestId = crypto.randomUUID();
     const requestPeer = {
       ...peer,

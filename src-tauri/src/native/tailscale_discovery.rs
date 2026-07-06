@@ -211,7 +211,7 @@ fn select_candidates(status: &TailscaleStatus) -> Vec<TailscaleCandidate> {
             Some((
                 peer_id.to_string(),
                 peer_ip.to_string(),
-                peer_hint(peer),
+                peer_ip.to_string(),
                 device_name_from_dns(peer),
                 platform_from_tailscale_os(peer),
             ))
@@ -247,16 +247,6 @@ fn first_tailscale_ip(node: &TailscaleNode) -> Option<&str> {
         .iter()
         .find(|ip| ip.starts_with("100.") || ip.contains(':'))
         .map(String::as_str)
-}
-
-fn peer_hint(node: &TailscaleNode) -> String {
-    let dns_name = node.dns_name.trim().trim_end_matches('.');
-    if !dns_name.is_empty() {
-        return dns_name.to_string();
-    }
-    first_tailscale_ip(node)
-        .unwrap_or("Tailscale peer")
-        .to_string()
 }
 
 fn device_name_from_dns(node: &TailscaleNode) -> Option<String> {
@@ -337,7 +327,7 @@ mod tests {
             peer,
         };
         let candidate = select_candidates(&status).into_iter().next().expect("candidate");
-        assert_eq!(candidate.peer_hint, "peer.tailnet.ts.net");
+        assert_eq!(candidate.peer_hint, "100.64.0.2");
         assert_eq!(candidate.room_id.len(), 6);
     }
 
@@ -405,8 +395,8 @@ mod tests {
 
         let candidates = select_candidates(&status);
         assert_eq!(candidates.len(), 2);
-        assert_eq!(candidates[0].peer_hint, "first.tailnet.ts.net");
-        assert_eq!(candidates[1].peer_hint, "second.tailnet.ts.net");
+        assert_eq!(candidates[0].peer_hint, "100.64.0.2");
+        assert_eq!(candidates[1].peer_hint, "100.64.0.3");
     }
 
     #[test]

@@ -149,3 +149,97 @@ Expected healthy remote state:
 - TCP `0.0.0.0:8790` is listening.
 - UDP `0.0.0.0:8788` is listening.
 - Firewall has enabled inbound allow rules for the same `kunochat.exe` path on Private/Public profiles.
+
+## Follow-up Debug Pass
+
+Additional checks were run after the first isolation pass.
+
+### Tailscale Peer Details
+
+`HomeDesktop` is still active in the tailnet:
+
+| Field | Value |
+| --- | --- |
+| HostName | `HomeDesktop` |
+| DNSName | `homedesktop.tailc8c15b.ts.net.` |
+| Tailscale IPv4 | `100.100.123.107` |
+| Tailscale IPv6 | `fd7a:115c:a1e0::6e01:7b7d` |
+| Online | `true` |
+| Active | `true` |
+| LastHandshake | fresh during the test |
+| LastWrite | fresh during the test |
+
+### Port Matrix
+
+The peer accepts unrelated TCP ports, but not KunoChat ports:
+
+| Target | Port | Result | Meaning |
+| --- | ---: | --- | --- |
+| `100.100.123.107` | `22` | open | Windows/OpenSSH or Tailscale SSH path is reachable |
+| `100.100.123.107` | `41475` | open | Tailscale PeerAPI is reachable |
+| `100.100.123.107` | `8787` | timeout | KunoChat signaling is not reachable |
+| `100.100.123.107` | `8790` | timeout | KunoChat native transfer is not reachable |
+| `homedesktop.tailc8c15b.ts.net` | `22` | open | MagicDNS resolves to the peer and TCP works |
+| `homedesktop.tailc8c15b.ts.net` | `41475` | open | MagicDNS path can reach PeerAPI |
+| `homedesktop.tailc8c15b.ts.net` | `8787` | timeout | MagicDNS path cannot reach KunoChat |
+| `homedesktop.tailc8c15b.ts.net` | `8790` | timeout | MagicDNS path cannot reach native transfer |
+
+This rules out a broad Tailscale TCP outage. The block is specific to KunoChat's inbound ports on the remote side.
+
+### SSH Probe
+
+SSH TCP connection reached `HomeDesktop`, but authentication was denied for the tested local users:
+
+```text
+Permission denied (publickey,password,keyboard-interactive).
+```
+
+This confirms the remote OS is reachable, but this debug session cannot inspect `HomeDesktop` internals without credentials or an already-authorized Tailscale SSH policy.
+
+### Installer/Firewall Packaging Check
+
+The repository and generated Windows installer artifacts were searched for explicit firewall setup:
+
+- No `New-NetFirewallRule`
+- No `netsh advfirewall`
+- No WiX firewall extension entry
+- No NSIS firewall rule entry
+
+This means Windows inbound permission currently depends on the OS firewall prompt or pre-existing application allow rules. If `HomeDesktop` installed a new binary path or rejected the firewall prompt, the app can run locally while remote peers cannot reach `8787` or `8790`.
+
+### Refined Root Cause
+
+The most probable root cause is now one of these remote-side states:
+
+1. `HomeDesktop` KunoChat is not running.
+2. `HomeDesktop` KunoChat is not updated to `0.6.2`.
+3. `HomeDesktop` KunoChat is running but not listening on TCP `0.0.0.0:8787` and `0.0.0.0:8790`.
+4. `HomeDesktop` Windows Firewall/security software blocks inbound TCP `8787` and `8790` for the active `kunochat.exe` path.
+5. `HomeDesktop` has stale firewall rules for an older KunoChat executable path.
+
+### One-shot Remote Repair Commands
+
+If `HomeDesktop` has administrator PowerShell available, these commands should repair the common firewall-path mismatch:
+
+```powershell
+$exe = Join-Path $env:LOCALAPPDATA 'KunoChat\kunochat.exe'
+Get-Process kunochat -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Process -FilePath $exe
+Start-Sleep -Seconds 3
+
+Get-NetFirewallRule -DisplayName 'KunoChat*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+New-NetFirewallRule -DisplayName 'KunoChat TCP 8787' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8787 -Program $exe -Profile Any
+New-NetFirewallRule -DisplayName 'KunoChat TCP 8790' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8790 -Program $exe -Profile Any
+New-NetFirewallRule -DisplayName 'KunoChat UDP 8788' -Direction Inbound -Action Allow -Protocol UDP -LocalPort 8788 -Program $exe -Profile Any
+
+(Get-Item $exe).VersionInfo | Select-Object FileVersion,ProductVersion,FileName
+Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -in 8787,8790 } | Select-Object LocalAddress,LocalPort,State,OwningProcess
+Get-NetUDPEndpoint | Where-Object { $_.LocalPort -eq 8788 } | Select-Object LocalAddress,LocalPort,OwningProcess
+```
+
+After those commands, this device should be able to pass:
+
+```powershell
+Test-NetConnection -ComputerName 100.100.123.107 -Port 8787
+Test-NetConnection -ComputerName 100.100.123.107 -Port 8790
+```

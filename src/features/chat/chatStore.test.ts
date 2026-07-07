@@ -957,6 +957,42 @@ describe("cancelled is a terminal state (F-B2 / BUG-013)", () => {
   });
 });
 
+describe("bundle item dedup on re-receive (F-C2)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.setSystemTime(new Date("2026-06-11T12:00:00Z"));
+    resetStore();
+  });
+
+  test("receivePeerAsset dedupes an already-saved bundle item across retries", () => {
+    const base = {
+      id: "bundle_msg",
+      senderId: "peer",
+      senderName: "Taro",
+      createdAt: 1,
+      caption: "photos",
+      kind: "image" as const,
+      mime: "image/png",
+      size: 100
+    };
+    // Two items received.
+    useChatStore.getState().receivePeerAsset({ ...base, transferId: "tr_a", name: "a.png" });
+    useChatStore.getState().receivePeerAsset({ ...base, transferId: "tr_b", name: "b.png" });
+    // Item A completes (saved to disk).
+    useChatStore.getState().completeTransfer({ messageId: "bundle_msg", transferId: "tr_a", savePath: "/x/a.png" });
+    const savedItem = useChatStore.getState().messages.find((m) => m.id === "bundle_msg")?.bundle?.items.find((i) => i.transferId === "tr_a");
+    expect(savedItem?.savePath).toBe("/x/a.png");
+
+    // Sender retries the whole bundle → item A is re-announced. It must not lose
+    // its savePath (which would trigger a duplicate download/save).
+    useChatStore.getState().receivePeerAsset({ ...base, transferId: "tr_a", name: "a.png" });
+    const afterRetry = useChatStore.getState().messages.find((m) => m.id === "bundle_msg")?.bundle?.items.find((i) => i.transferId === "tr_a");
+    expect(afterRetry?.savePath).toBe("/x/a.png");
+    // Still exactly two items, no duplication.
+    expect(useChatStore.getState().messages.find((m) => m.id === "bundle_msg")?.bundle?.items).toHaveLength(2);
+  });
+});
+
 describe("createQuotaSafeStorage (F-B5)", () => {
   test("persist setItem quota error does not throw and trims history", async () => {
     const { createQuotaSafeStorage } = await import("./chatStore");

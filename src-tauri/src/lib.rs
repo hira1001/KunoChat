@@ -11,6 +11,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
+                // Restore a minimized window before showing, otherwise a second
+                // launch only flashes the taskbar entry instead of surfacing it.
+                let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
             }
@@ -39,10 +42,18 @@ pub fn run() {
             native::peer_discovery::start(app.handle().clone());
             native::tailscale_discovery::start(app.handle().clone());
             native::tray::build_tray(app)?;
-            native::shortcuts::register(app.handle())?;
+            // A shortcut already taken by another app must not crash startup.
+            if let Err(error) = native::shortcuts::register(app.handle()) {
+                eprintln!("KunoChat global shortcut registration failed: {error}");
+            }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window::position_top_right_for_window(&window);
             }
+            // Reclaim leftover temp zips and orphaned .part files from prior runs.
+            tauri::async_runtime::spawn_blocking(|| {
+                fs::cleanup_temporary_zips();
+                fs::cleanup_stale_part_files();
+            });
             Ok(())
         })
         .on_window_event(|window, event| {

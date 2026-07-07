@@ -13,7 +13,7 @@ import { DEFAULT_CONVERSATION_ID, selectPendingConnectionMessages, selectUnacked
 import { runtimeConfig } from "../features/config/runtimeConfig";
 import type { ChatMessage, ConnectionStatus, ConversationSummary, DraftAttachment, TrustedPeer } from "../features/chat/messageTypes";
 import { platformAdapter, type DurableTransferSession } from "../features/native/platformAdapter";
-import { realtimeClient } from "../features/realtime/realtimeClient";
+import { realtimeClient, webrtcSizeLimitExceeded } from "../features/realtime/realtimeClient";
 import type { RealtimeAssetMeta, RealtimeBinarySource, RealtimeConnectOptions } from "../features/realtime/realtimeTypes";
 import { roleForPair, roomIdForPair } from "../features/realtime/pairing";
 import { createConnectGuard } from "../features/chat/connectGuard";
@@ -414,8 +414,25 @@ export function App() {
           thumbnail: asset.thumbnail,
           isFolder: asset.isFolder
         });
+        // Reject an oversized WebRTC-only transfer before we start accumulating it
+        // in renderer memory (would OOM-crash the window).
+        if (webrtcSizeLimitExceeded(asset.size, Boolean(asset.nativeKey))) {
+          failTransfer({
+            messageId: asset.messageId,
+            transferId: asset.transferId,
+            message: "このサイズはネイティブ転送が必要です。両端末のKunoChatを最新にして再試行してください。"
+          });
+          return;
+        }
         if (isNewMessage) {
           void notifyIncoming(`${asset.senderName} がファイルを送信しました`, asset.name);
+        }
+        // Skip re-download if this exact transfer was already saved (e.g. a bundle
+        // retry after our own restart cleared incomingRequestsRef). Prevents
+        // duplicate files on disk.
+        if (alreadySavedTransfer(asset.messageId, asset.transferId)) {
+          incomingRequestsRef.current.add(asset.transferId);
+          return;
         }
         if (!incomingRequestsRef.current.has(asset.transferId)) {
           incomingRequestsRef.current.add(asset.transferId);
@@ -1582,6 +1599,20 @@ export function App() {
   );
 }
 
+// True when the given transfer within a message has already been saved to disk,
+// so a re-announced asset-start (bundle retry) must not trigger a re-download.
+function alreadySavedTransfer(messageId: string, transferId: string): boolean {
+  const message = useChatStore.getState().messages.find((candidate) => candidate.id === messageId);
+  if (!message) {
+    return false;
+  }
+  if (message.asset?.transferId === transferId) {
+    return Boolean(message.asset.savePath);
+  }
+  const item = message.bundle?.items.find((candidate) => candidate.transferId === transferId);
+  return Boolean(item?.savePath);
+}
+
 async function sendRealtimeMessage(message: ChatMessage) {
   if ((message.kind === "text" || message.kind === "link" || message.kind === "code") && message.text) {
     realtimeClient.sendText({
@@ -1748,6 +1779,9 @@ async function persistReceivedAsset(
   failTransfer: (payload: { messageId: string; transferId: string; message: string }) => void
 ) {
   try {
+    if (webrtcSizeLimitExceeded(input.blob.size, Boolean(input.meta.nativeKey))) {
+      throw new Error("このサイズはネイティブ転送が必要です。両端末のKunoChatを最新にして再試行してください。");
+    }
     const bytes = await input.blob.arrayBuffer();
     if (input.meta.sha256) {
       const actualHash = await sha256ArrayBuffer(bytes);

@@ -2559,6 +2559,7 @@ version = "0.6.2"
 dependencies = [
  "chacha20poly1305",
  "dirs 5.0.1",
+ "dunce",
  "ed25519-dalek",
  "futures-util",
  "keyring",

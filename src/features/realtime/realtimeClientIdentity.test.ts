@@ -118,8 +118,11 @@ describe("identity gating (C-3/C-7)", () => {
     };
 
     (realtimeClient as any).handleControl(channel, REMOTE_HELLO);
-    // fingerprintFromPublicKey is async (crypto.subtle); let it resolve.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // fingerprintFromPublicKey is async (crypto.subtle); poll until it resolves
+    // rather than relying on a single microtask turn (flaky under full-suite load).
+    await vi.waitFor(() => {
+      expect(harness.statuses).toContain("connected");
+    });
 
     expect(harness.statuses).toContain("connected");
     expect(readyWhenConnected).toBe(true);

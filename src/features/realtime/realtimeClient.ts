@@ -42,6 +42,13 @@ type SendAssetOptions = {
 };
 
 export const MAX_ASSET_SIZE_BYTES = 10 * 1024 * 1024 * 1024;
+// The WebRTC fallback assembles the whole file in renderer memory, so cap it well
+// below the native path's 10 GiB. Larger files must use the native transfer.
+export const WEBRTC_RECEIVE_SIZE_LIMIT = 512 * 1024 * 1024;
+
+export function webrtcSizeLimitExceeded(size: number, hasNativeKey: boolean): boolean {
+  return !hasNativeKey && Number.isFinite(size) && size > WEBRTC_RECEIVE_SIZE_LIMIT;
+}
 const MAX_TRANSFER_ID_LENGTH = 128;
 const DEVICE_PUBLIC_KEY_PATTERN = /^[a-f0-9]{64}$/i;
 const IDENTITY_NONCE_PATTERN = /^[a-f0-9]{64}$/i;
@@ -1206,10 +1213,14 @@ class KunoRealtimeClient {
       if (!this.manualDisconnect && this.peer?.connectionState === "connected") {
         this.callbacks?.onStatus("reconnecting");
         this.scheduleReconnect();
+      } else {
+        // No reconnect path: don't leave in-flight WebRTC receives stuck at N%.
+        this.failActiveWebrtcReceives("接続が切断されました。再接続後にもう一度送ってもらってください。");
       }
     };
     channel.onerror = () => {
       this.callbacks?.onStatus("failed");
+      this.failActiveWebrtcReceives("転送中に接続エラーが発生しました。再送してもらってください。");
       this.scheduleReconnect();
     };
     channel.onmessage = (event) => {
@@ -1732,13 +1743,25 @@ class KunoRealtimeClient {
     }
   }
 
+  // Fails every in-flight incoming transfer. Called when the peer connection is
+  // gone with no reconnect, so a receive can't sit at N% forever with no feedback.
+  private failActiveWebrtcReceives(message: string) {
+    for (const transfer of Array.from(this.incomingTransfers.values())) {
+      if (!transfer.failed) {
+        this.failIncomingTransfer(transfer, message);
+      }
+    }
+  }
+
   private failIncomingTransfer(transfer: IncomingTransfer, message: string) {
     if (transfer.failed) {
       return;
     }
     transfer.failed = true;
     this.incomingTransfers.delete(transfer.meta.transferId);
-    void platformAdapter.deletePartFile(transfer.meta.transferId).catch(() => undefined);
+    void platformAdapter.deletePartFile(transfer.meta.transferId).catch((error) => {
+      console.warn("Failed to delete part file after transfer failure:", error);
+    });
     void platformAdapter.cancelNativeReceive(transfer.meta.transferId).catch(() => undefined);
     this.callbacks?.onAssetFailed({
       id: transfer.meta.messageId,

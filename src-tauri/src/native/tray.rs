@@ -25,7 +25,14 @@ pub fn build_tray(app: &mut App) -> tauri::Result<()> {
         ],
     )?;
 
-    TrayIconBuilder::with_id("main")
+    let mut builder = TrayIconBuilder::with_id("main");
+    // Bind the app icon explicitly; on some platforms build() fails/panics
+    // without an icon. Fall back gracefully if none is embedded.
+    if let Some(icon) = app.default_window_icon().cloned() {
+        builder = builder.icon(icon);
+    }
+
+    builder
         .tooltip("KunoChat")
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -53,8 +60,17 @@ pub fn build_tray(app: &mut App) -> tauri::Result<()> {
             "downloads" => {
                 if let Some(downloads) = dirs::download_dir() {
                     let kunochat_downloads = downloads.join("KunoChat");
-                    let _ = std::fs::create_dir_all(&kunochat_downloads);
-                    let _ = open::that(kunochat_downloads);
+                    // Only open the folder if we could ensure it exists, so a
+                    // failed create doesn't surface a raw OS error dialog.
+                    match std::fs::create_dir_all(&kunochat_downloads) {
+                        Ok(()) => {
+                            let _ = open::that(kunochat_downloads);
+                        }
+                        Err(error) => {
+                            eprintln!("KunoChat could not open downloads folder: {error}");
+                            let _ = open::that(downloads);
+                        }
+                    }
                 }
             }
             "settings" => {

@@ -75,6 +75,37 @@ pub async fn unique_save_path(
     Err("could not create unique path".to_string())
 }
 
+/// Atomically reserves a unique destination path by creating the file with
+/// create_new, so two concurrent receives of the same-named file can never pick
+/// the same path (the unique_save_path → File::create sequence had a TOCTOU gap).
+fn reserve_unique_file(dir: &Path, filename: &str) -> Result<(PathBuf, File), String> {
+    let safe = sanitize_filename(filename);
+    let base = Path::new(&safe);
+    let stem = base
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("file")
+        .to_string();
+    let extension = base.extension().and_then(|value| value.to_str());
+    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    for index in 0..1000 {
+        let name = if index == 0 {
+            safe.clone()
+        } else if let Some(extension) = extension {
+            format!("{stem} {}.{extension}", index + 1)
+        } else {
+            format!("{stem} {}", index + 1)
+        };
+        let candidate = dir.join(&name);
+        match OpenOptions::new().create_new(true).write(true).open(&candidate) {
+            Ok(file) => return Ok((candidate, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Err("could not create a unique save path".to_string())
+}
+
 #[tauri::command]
 pub async fn file_metadata(path: String) -> Result<FileMetadata, String> {
     let path = canonical_file_path(&path)?;
@@ -176,12 +207,8 @@ pub async fn save_received_file(
     if bytes.len() as u64 > MAX_TRANSFER_BYTES {
         return Err("received file exceeds the maximum supported size".to_string());
     }
-    let save_path = PathBuf::from(unique_save_path(filename, save_folder).await?);
-    if let Some(parent) = save_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-
-    let mut file = File::create(&save_path).map_err(|error| error.to_string())?;
+    let dir = resolve_save_dir(save_folder.as_deref())?;
+    let (save_path, mut file) = reserve_unique_file(&dir, &filename)?;
     file.write_all(&bytes).map_err(|error| error.to_string())?;
     Ok(save_path.to_string_lossy().to_string())
 }
@@ -200,7 +227,9 @@ pub(crate) fn resolve_save_dir(save_folder: Option<&str>) -> Result<PathBuf, Str
         .transpose()?
         .unwrap_or(default_downloads_dir()?);
     std::fs::create_dir_all(&selected).map_err(|error| error.to_string())?;
-    selected.canonicalize().map_err(|error| error.to_string())
+    // dunce::canonicalize avoids the Windows \\?\ UNC prefix, which the Tauri fs
+    // scope does not recognize (would reject reads/writes as out of scope).
+    dunce::canonicalize(&selected).map_err(|error| error.to_string())
 }
 
 fn expand_home_path(value: &str) -> Result<PathBuf, String> {
@@ -274,7 +303,9 @@ pub(crate) fn prepare_part_path(
 
 fn canonical_file_path(path: &str) -> Result<PathBuf, String> {
     let path = Path::new(path);
-    let canonical = path.canonicalize().map_err(|error| error.to_string())?;
+    // dunce::canonicalize keeps the plain Windows path (no \\?\ prefix) so the
+    // Tauri fs scope allow-list matches.
+    let canonical = dunce::canonicalize(path).map_err(|error| error.to_string())?;
     if canonical.is_file() {
         Ok(canonical)
     } else {
@@ -365,12 +396,13 @@ fn uuid_hint() -> String {
     format!("{}_{}", now, rand_hint())
 }
 
-fn rand_hint() -> u32 {
-    let mut val = 0_u32;
-    if let Ok(duration) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        val = duration.subsec_nanos();
-    }
-    val
+fn rand_hint() -> String {
+    // Cryptographically-strong randomness avoids temp-name collisions that the
+    // old subsec_nanos hint could hit on coarse-resolution clocks.
+    use rand_core::RngCore;
+    let mut bytes = [0_u8; 8];
+    rand_core::OsRng.fill_bytes(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn create_temp_zip_file(folder_name: &str) -> Result<(PathBuf, File), String> {
@@ -526,11 +558,12 @@ pub async fn finalize_part_file(
         }
     }
 
-    let dest_path = PathBuf::from(unique_save_path(filename, save_folder).await?);
-    if let Some(parent) = dest_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-
+    // Atomically reserve the destination name, then swap the completed part file
+    // into it. Prevents two concurrent finalizes from resolving to the same path.
+    let dir = resolve_save_dir(save_folder.as_deref())?;
+    let (dest_path, reserved) = reserve_unique_file(&dir, &filename)?;
+    drop(reserved);
+    std::fs::remove_file(&dest_path).map_err(|e| e.to_string())?;
     std::fs::rename(&part_path, &dest_path).map_err(|e| e.to_string())?;
     Ok(dest_path.to_string_lossy().into_owned())
 }
@@ -550,10 +583,8 @@ pub async fn delete_part_file(
 #[tauri::command]
 pub async fn delete_temporary_zip(path: String) -> Result<(), String> {
     let path = PathBuf::from(path);
-    let temp_dir = std::env::temp_dir()
-        .canonicalize()
-        .map_err(|error| error.to_string())?;
-    let canonical = path.canonicalize().map_err(|error| error.to_string())?;
+    let temp_dir = dunce::canonicalize(std::env::temp_dir()).map_err(|error| error.to_string())?;
+    let canonical = dunce::canonicalize(&path).map_err(|error| error.to_string())?;
     let filename = canonical
         .file_name()
         .and_then(|value| value.to_str())
@@ -567,6 +598,64 @@ pub async fn delete_temporary_zip(path: String) -> Result<(), String> {
     }
 
     std::fs::remove_file(canonical).map_err(|error| error.to_string())
+}
+
+fn remove_matching_files_older_than(
+    dir: &Path,
+    max_age: std::time::Duration,
+    keep: impl Fn(&str) -> bool,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        if !keep(name) {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let is_stale = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .map(|age| age > max_age)
+            .unwrap_or(false);
+        if is_stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Deletes leftover folder-transfer zips (KunoChat_Dir_*.zip) in the OS temp dir
+/// older than 24h, so a crash or lost cleanup callback can't slowly fill the disk.
+pub fn cleanup_temporary_zips() {
+    remove_matching_files_older_than(
+        &std::env::temp_dir(),
+        std::time::Duration::from_secs(24 * 60 * 60),
+        |name| name.starts_with("KunoChat_Dir_") && name.ends_with(".zip"),
+    );
+}
+
+/// Deletes orphaned .part files in the default save folder older than 7 days
+/// (a cancelled or crashed receive can leave these behind).
+pub fn cleanup_stale_part_files() {
+    let Ok(save_dir) = resolve_save_dir(None) else {
+        return;
+    };
+    remove_matching_files_older_than(
+        &save_dir.join(".parts"),
+        std::time::Duration::from_secs(7 * 24 * 60 * 60),
+        |name| name.ends_with(".part"),
+    );
 }
 
 fn sanitize_filename(filename: &str) -> String {
@@ -602,7 +691,64 @@ fn sha256_for_path(path: &Path) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_sha256, sanitize_filename, validate_transfer_id};
+    use super::{
+        is_sha256, rand_hint, remove_matching_files_older_than, reserve_unique_file,
+        sanitize_filename, validate_transfer_id,
+    };
+    use std::time::Duration;
+
+    #[test]
+    fn temp_hints_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..1000 {
+            assert!(seen.insert(rand_hint()), "rand_hint produced a collision");
+        }
+    }
+
+    #[test]
+    fn concurrent_saves_do_not_overwrite() {
+        let dir = std::env::temp_dir().join(format!("kuno_test_{}", rand_hint()));
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let (first, _f1) = reserve_unique_file(&dir, "document.pdf").expect("first");
+        let (second, _f2) = reserve_unique_file(&dir, "document.pdf").expect("second");
+        let (third, _f3) = reserve_unique_file(&dir, "document.pdf").expect("third");
+        assert_ne!(first, second);
+        assert_ne!(second, third);
+        assert!(first.ends_with("document.pdf"));
+        assert!(second.file_name().unwrap().to_str().unwrap().contains("document 2"));
+        assert!(third.file_name().unwrap().to_str().unwrap().contains("document 3"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cleanup_removes_only_old_matching_files() {
+        let dir = std::env::temp_dir().join(format!("kuno_gc_{}", rand_hint()));
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let old_zip = dir.join("KunoChat_Dir_old.zip");
+        let fresh_zip = dir.join("KunoChat_Dir_fresh.zip");
+        let other = dir.join("keepme.txt");
+        std::fs::write(&old_zip, b"x").unwrap();
+        std::fs::write(&fresh_zip, b"x").unwrap();
+        std::fs::write(&other, b"x").unwrap();
+        // Backdate the old zip well beyond the threshold.
+        let old_time = std::time::SystemTime::now() - Duration::from_secs(48 * 60 * 60);
+        filetime_set(&old_zip, old_time);
+
+        remove_matching_files_older_than(&dir, Duration::from_secs(24 * 60 * 60), |name| {
+            name.starts_with("KunoChat_Dir_") && name.ends_with(".zip")
+        });
+
+        assert!(!old_zip.exists(), "stale zip should be removed");
+        assert!(fresh_zip.exists(), "fresh zip should be kept");
+        assert!(other.exists(), "non-matching file should be kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn filetime_set(path: &std::path::Path, when: std::time::SystemTime) {
+        // Best-effort mtime backdating for the GC test; skip if unsupported.
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        let _ = file.set_modified(when);
+    }
 
     #[test]
     fn sanitize_filename_replaces_path_separators() {

@@ -1177,17 +1177,23 @@ export const useChatStore = create<ChatStore>()(
           settings: { ...state.settings, ...settings }
         })),
       clearHistory: () =>
-        set((state) => ({
-          messages: [],
-          deliveryOutbox: [],
-          transferStates: {},
-          unreadCount: 0,
-          conversations: state.conversations.map((conversation) => ({
-            ...conversation,
-            lastMessagePreview: "",
-            unreadCount: 0
-          }))
-        })),
+        set((state) => {
+          // Release any live blob: preview URLs before dropping the messages.
+          for (const message of state.messages) {
+            revokeMessageBlobPreviews(message);
+          }
+          return {
+            messages: [],
+            deliveryOutbox: [],
+            transferStates: {},
+            unreadCount: 0,
+            conversations: state.conversations.map((conversation) => ({
+              ...conversation,
+              lastMessagePreview: "",
+              unreadCount: 0
+            }))
+          };
+        }),
       loadHistory: async () => {
         const history = await dbService.getTransfersHistory();
         set({ history });
@@ -1439,6 +1445,19 @@ function revokeDraftAttachmentPreview(attachment: DraftAttachment) {
   if (attachment.previewUrl?.startsWith("blob:")) {
     URL.revokeObjectURL(attachment.previewUrl);
   }
+}
+
+function revokeBlobUrl(previewUrl?: string) {
+  if (previewUrl?.startsWith("blob:")) {
+    URL.revokeObjectURL(previewUrl);
+  }
+}
+
+// Frees blob: object URLs held by a message's asset/bundle previews so clearing
+// history doesn't leak renderer memory.
+function revokeMessageBlobPreviews(message: ChatMessage) {
+  revokeBlobUrl(message.asset?.previewUrl);
+  message.bundle?.items.forEach((item) => revokeBlobUrl(item.previewUrl));
 }
 
 function sanitizePersistedTransferStates(value: unknown): Record<string, TransferState> {
@@ -1884,11 +1903,17 @@ function assetContentFromIncoming(input: {
 }
 
 function upsertBundleItem(items: AssetContent[], next: AssetContent): AssetContent[] {
-  const found = items.some((item) => item.transferId === next.transferId);
-  if (!found) {
+  // Match by stable item id or transfer id (both are preserved across a retry).
+  const existing = items.find((item) => item.id === next.id || item.transferId === next.transferId);
+  if (!existing) {
     return [...items, next];
   }
-  return items.map((item) => (item.transferId === next.transferId ? { ...item, ...next, progress: next.progress ?? item.progress } : item));
+  // An already-saved item that is re-announced (bundle retry) must be kept as-is
+  // so it isn't re-downloaded and duplicated on disk.
+  if (existing.savePath) {
+    return items;
+  }
+  return items.map((item) => (item === existing ? { ...item, ...next, progress: next.progress ?? item.progress } : item));
 }
 
 function totalBundleSize(items: AssetContent[]): number {

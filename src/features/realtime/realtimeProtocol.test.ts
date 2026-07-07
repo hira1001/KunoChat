@@ -1,5 +1,33 @@
 import { describe, expect, test } from "vitest";
-import { decodeBinaryChunk, encodeBinaryChunk, identityHelloChanged, identityTrustStatus } from "./realtimeClient";
+import {
+  decodeBinaryChunk,
+  encodeBinaryChunk,
+  identityHelloChanged,
+  identityTrustStatus,
+  parseStablePeerId,
+  webrtcSizeLimitExceeded,
+  WEBRTC_RECEIVE_SIZE_LIMIT
+} from "./realtimeClient";
+
+describe("webrtcSizeLimitExceeded", () => {
+  test("rejects oversized WebRTC-only transfers", () => {
+    expect(webrtcSizeLimitExceeded(WEBRTC_RECEIVE_SIZE_LIMIT + 1, false)).toBe(true);
+    expect(webrtcSizeLimitExceeded(WEBRTC_RECEIVE_SIZE_LIMIT, false)).toBe(false);
+  });
+
+  test("allows large transfers that use the native path", () => {
+    expect(webrtcSizeLimitExceeded(5 * 1024 * 1024 * 1024, true)).toBe(false);
+  });
+});
+
+describe("parseStablePeerId", () => {
+  test("accepts valid ids and rejects malformed values", () => {
+    expect(parseStablePeerId("peer_ok-1")).toBe("peer_ok-1");
+    expect(parseStablePeerId("../x")).toBeUndefined();
+    expect(parseStablePeerId(42)).toBeUndefined();
+    expect(parseStablePeerId(undefined)).toBeUndefined();
+  });
+});
 
 function bytes(values: number[]) {
   return new Uint8Array(values).buffer;

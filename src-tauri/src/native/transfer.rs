@@ -354,7 +354,7 @@ async fn send_file_stream(
         }
         let encrypted = cipher
             .encrypt(
-                Nonce::from_slice(&nonce_bytes(nonce_prefix, sequence)),
+                Nonce::from_slice(&nonce_bytes(nonce_prefix, sequence)?),
                 Payload {
                     msg: &buffer[..bytes_read],
                     aad: transfer_id.as_bytes(),
@@ -484,7 +484,7 @@ async fn receive_file_body(
         }
         let bytes = cipher
             .decrypt(
-                Nonce::from_slice(&nonce_bytes(nonce_prefix, sequence)),
+                Nonce::from_slice(&nonce_bytes(nonce_prefix, sequence)?),
                 Payload {
                     msg: &encrypted,
                     aad: transfer_id.as_bytes(),
@@ -644,13 +644,15 @@ async fn read_exact(stream: &mut TcpStream, bytes: &mut [u8]) -> Result<(), Stri
         .map_err(|error| error.to_string())
 }
 
-fn nonce_bytes(prefix: u64, sequence: u64) -> [u8; 12] {
-    let sequence =
-        u32::try_from(sequence).expect("10 GiB transfer limit keeps sequence within u32");
+fn nonce_bytes(prefix: u64, sequence: u64) -> Result<[u8; 12], String> {
+    // A crafted stream of tiny frames could push the sequence past u32 before the
+    // 10 GiB size limit trips. Fail the transfer instead of panicking (DoS).
+    let sequence = u32::try_from(sequence)
+        .map_err(|_| "native transfer sequence exceeded its range".to_string())?;
     let mut bytes = [0_u8; 12];
     bytes[..8].copy_from_slice(&prefix.to_be_bytes());
     bytes[8..].copy_from_slice(&sequence.to_be_bytes());
-    bytes
+    Ok(bytes)
 }
 
 fn next_connection_nonce() -> u64 {
@@ -725,9 +727,16 @@ mod tests {
 
     #[test]
     fn nonce_combines_connection_and_sequence() {
-        let nonce = nonce_bytes(0x0102030405060708, 9);
+        let nonce = nonce_bytes(0x0102030405060708, 9).expect("nonce");
         assert_eq!(&nonce[..8], &[1, 2, 3, 4, 5, 6, 7, 8]);
         assert_eq!(nonce[11], 9);
+    }
+
+    #[test]
+    fn nonce_bytes_rejects_overflow() {
+        // Sequence beyond u32::MAX must fail instead of panicking (DoS guard).
+        assert!(nonce_bytes(1, u64::from(u32::MAX) + 1).is_err());
+        assert!(nonce_bytes(1, u64::from(u32::MAX)).is_ok());
     }
 
     #[test]
@@ -762,7 +771,7 @@ mod tests {
     fn transfer_frame_authenticates_its_payload_and_transfer_id() {
         let key = parse_key(&"5a".repeat(32)).expect("key");
         let cipher = ChaCha20Poly1305::new((&key).into());
-        let nonce = nonce_bytes(7, 3);
+        let nonce = nonce_bytes(7, 3).expect("nonce");
         let ciphertext = cipher
             .encrypt(
                 Nonce::from_slice(&nonce),

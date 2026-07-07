@@ -56,6 +56,13 @@ type ChatStore = {
   setConversationTrustedPeer: (conversationId: string, trustedPeer?: TrustedPeer) => void;
   setConversationStablePeerId: (conversationId: string, stablePeerId: string) => void;
   adoptConversationIdentity: (conversationId: string, trustedPeer: TrustedPeer) => string;
+  registerConversation: (input: {
+    peerHint: string;
+    displayName?: string;
+    source?: ConversationSummary["source"];
+    platform?: string;
+    stablePeerId?: string;
+  }) => string;
   incrementUnread: () => void;
   clearUnread: () => void;
   setPeerTyping: (isTyping: boolean, at?: number) => void;
@@ -260,6 +267,46 @@ export const useChatStore = create<ChatStore>()(
             conversation.id === conversationId ? { ...conversation, stablePeerId } : conversation
           )
         })),
+      registerConversation: (input) => {
+        // Add/update a conversation WITHOUT switching the active view or drafts.
+        // Resolves the same physical device to one conversation across routes
+        // (LAN/Tailscale) so auto-registration never forks a tab.
+        let resolvedId = "";
+        set((state) => {
+          const existing = matchConversationByDevice(state.conversations, {
+            stablePeerId: input.stablePeerId,
+            deviceName: input.displayName,
+            peerHint: input.peerHint
+          });
+          if (existing) {
+            resolvedId = existing.id;
+            const nextConversations = upsertConversation(state.conversations, {
+              ...existing,
+              // Update route/identity fields with the latest values (undefined
+              // must not clobber existing data).
+              peerHint: input.peerHint ?? existing.peerHint,
+              source: input.source ?? existing.source,
+              platform: input.platform ?? existing.platform,
+              displayName: input.displayName || existing.displayName,
+              stablePeerId: input.stablePeerId ?? existing.stablePeerId
+            });
+            return { conversations: nextConversations };
+          }
+          resolvedId = conversationIdForPeer(input.peerHint);
+          const nextConversations = upsertConversation(state.conversations, {
+            id: resolvedId,
+            displayName: input.displayName || input.peerHint,
+            peerHint: input.peerHint,
+            source: input.source ?? "unknown",
+            platform: input.platform,
+            stablePeerId: input.stablePeerId,
+            unreadCount: 0,
+            connectionStatus: "pairing"
+          });
+          return { conversations: nextConversations };
+        });
+        return resolvedId;
+      },
       adoptConversationIdentity: (conversationId, trustedPeer) => {
         // Merge the fingerprint-identified peer's conversation history so that a
         // single device that reconnects over a different IP (Wi-Fi ⇄ Tailscale,
@@ -1846,11 +1893,41 @@ function createDefaultConversation(displayName = "Peer", messages: ChatMessage[]
   };
 }
 
-function conversationIdForPeer(value: string | undefined): string {
+export function conversationIdForPeer(value: string | undefined): string {
   if (!value) {
     return DEFAULT_CONVERSATION_ID;
   }
   return `peer_${value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 96)}`;
+}
+
+// Resolves an incoming device (by stable id, hostname, or route IP) to an
+// existing conversation so the same device is never split across routes. Uses
+// exact matches only (no partial) to avoid wrong merges.
+function matchConversationByDevice(
+  conversations: ConversationSummary[],
+  input: { stablePeerId?: string; deviceName?: string; peerHint?: string }
+): ConversationSummary | undefined {
+  if (input.stablePeerId) {
+    const byStable = conversations.find((conversation) => conversation.stablePeerId === input.stablePeerId);
+    if (byStable) {
+      return byStable;
+    }
+  }
+  const name = input.deviceName?.trim().toLowerCase();
+  if (name) {
+    const byName = conversations.find((conversation) => conversation.displayName?.trim().toLowerCase() === name);
+    if (byName) {
+      return byName;
+    }
+  }
+  if (input.peerHint) {
+    const id = conversationIdForPeer(input.peerHint);
+    const byId = conversations.find((conversation) => conversation.id === id);
+    if (byId) {
+      return byId;
+    }
+  }
+  return undefined;
 }
 
 function conversationIdForIncomingPeer(

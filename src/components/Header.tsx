@@ -2,6 +2,7 @@ import { ChevronDown, Clock3, History, MessageCircle, Minimize2, Plus, Settings,
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { ConnectionStatus, ConversationSummary } from "../features/chat/messageTypes";
+import { DEFAULT_CONVERSATION_ID } from "../features/chat/chatStore";
 import { BrandMark } from "./BrandMark";
 import { StatusDot } from "./StatusDot";
 
@@ -141,7 +142,15 @@ export function Header({
             </button>
           </div>
           <div className="max-h-72 overflow-y-auto p-1.5">
-            {conversations.map((conversation) => {
+            {conversations
+              .filter(
+                (conversation) =>
+                  conversation.id !== DEFAULT_CONVERSATION_ID ||
+                  Boolean(conversation.peerHint) ||
+                  Boolean(conversation.lastMessageAt) ||
+                  conversation.id === activeConversationId
+              )
+              .map((conversation) => {
               const active = conversation.id === activeConversationId;
               const pending = pendingByConversation[conversation.id] ?? 0;
               return (

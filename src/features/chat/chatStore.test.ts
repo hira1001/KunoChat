@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { DEFAULT_CONVERSATION_ID, useChatStore } from "./chatStore";
+import { conversationIdForPeer, DEFAULT_CONVERSATION_ID, useChatStore } from "./chatStore";
 import type { DraftAttachment } from "./messageTypes";
 
 function attachment(overrides: Partial<DraftAttachment> = {}): DraftAttachment {
@@ -781,6 +781,65 @@ describe("chatStore", () => {
     useChatStore.getState().receivePeerAsset(input);
     const storedMsg = useChatStore.getState().messages.find(m => m.id === "asset_msg_thumb");
     expect(storedMsg?.asset?.thumbnail).toBe("data:image/jpeg;base64,abc");
+  });
+});
+
+describe("registerConversation", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.setSystemTime(new Date("2026-06-11T12:00:00Z"));
+    resetStore();
+  });
+
+  test("registerConversation_creates_without_activating", () => {
+    const before = useChatStore.getState();
+    const id = before.registerConversation({ peerHint: "100.100.123.107", displayName: "HomeDesktop", source: "tailscale" });
+    const after = useChatStore.getState();
+    expect(after.activeConversationId).toBe(before.activeConversationId); // unchanged
+    expect(after.draftText).toBe(before.draftText);
+    const created = after.conversations.find((c) => c.id === id);
+    expect(created?.peerHint).toBe("100.100.123.107");
+    expect(created?.displayName).toBe("HomeDesktop");
+    expect(created?.source).toBe("tailscale");
+  });
+
+  test("conversationIdForPeer_is_exported_and_stable", () => {
+    expect(conversationIdForPeer("100.100.123.107")).toBe(conversationIdForPeer("100.100.123.107"));
+    expect(conversationIdForPeer(undefined)).toBe(DEFAULT_CONVERSATION_ID);
+  });
+
+  test("registerConversation_reroutes_peerHint_without_changing_id", () => {
+    // Registered via Tailscale first.
+    const id = useChatStore.getState().registerConversation({ peerHint: "100.100.123.107", displayName: "HomeDesktop", source: "tailscale" });
+    const countAfterFirst = useChatStore.getState().conversations.length;
+    // Same device appears via LAN (same hostname, different IP).
+    const id2 = useChatStore.getState().registerConversation({ peerHint: "192.168.64.51", displayName: "HomeDesktop", source: "lan" });
+    expect(id2).toBe(id); // resolved to the same conversation
+    expect(useChatStore.getState().conversations.length).toBe(countAfterFirst); // no split
+    const merged = useChatStore.getState().conversations.find((c) => c.id === id);
+    expect(merged?.peerHint).toBe("192.168.64.51"); // route updated to the latest
+    expect(merged?.source).toBe("lan");
+  });
+
+  test("registerConversation_updates_existing_by_stablePeerId_and_by_displayName", () => {
+    const id = useChatStore.getState().registerConversation({ peerHint: "100.0.0.1", displayName: "Laptop", source: "tailscale", stablePeerId: "peer_stable_1" });
+    // Match by stablePeerId even though displayName/peerHint differ.
+    const id2 = useChatStore.getState().registerConversation({ peerHint: "10.0.0.9", displayName: "Renamed", source: "lan", stablePeerId: "peer_stable_1" });
+    expect(id2).toBe(id);
+    expect(useChatStore.getState().conversations.filter((c) => c.stablePeerId === "peer_stable_1")).toHaveLength(1);
+  });
+
+  test("registerConversation_preserves_unread_and_messages", () => {
+    const id = useChatStore.getState().registerConversation({ peerHint: "100.0.0.1", displayName: "Peer1", source: "tailscale" });
+    useChatStore.setState((state) => ({
+      conversations: state.conversations.map((c) => (c.id === id ? { ...c, unreadCount: 4, lastMessageAt: 123, lastMessagePreview: "hi" } : c))
+    }));
+    // Re-register (e.g. a fresh discovery event) must not wipe unread/messages.
+    useChatStore.getState().registerConversation({ peerHint: "100.0.0.1", displayName: "Peer1", source: "tailscale" });
+    const conversation = useChatStore.getState().conversations.find((c) => c.id === id);
+    expect(conversation?.unreadCount).toBe(4);
+    expect(conversation?.lastMessageAt).toBe(123);
+    expect(conversation?.lastMessagePreview).toBe("hi");
   });
 });
 

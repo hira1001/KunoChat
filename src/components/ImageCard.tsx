@@ -16,6 +16,9 @@ type ImageCardProps = {
 
 export function ImageCard({ asset, status, progress, variant = "card", onDownload }: ImageCardProps) {
   const [previewOpen, setPreviewOpen] = useState(false);
+  // Set when the chosen preview URL fails to load (e.g. a dead blob URL after a
+  // restart). We then fall back to the on-disk file via convertFileSrc.
+  const [previewBroken, setPreviewBroken] = useState(false);
   const activeProgress = progress ?? asset.progress;
   const messageVariant = variant === "message";
   const isActive = status === "sending" || status === "receiving";
@@ -23,7 +26,15 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
   const openPath = asset.savePath ?? asset.localPath;
   const localPreviewUrl = useLocalImagePreview(openPath, asset.mime);
   const storedPreviewUrl = asset.previewUrl?.startsWith("blob:") && openPath ? undefined : asset.previewUrl;
-  const previewUrl = localPreviewUrl ?? storedPreviewUrl ?? asset.thumbnail;
+  const fileFallbackUrl = openPath ? platformAdapter.filePreviewUrl(openPath, asset.mime) : undefined;
+  const previewUrl = previewBroken
+    ? fileFallbackUrl
+    : localPreviewUrl ?? storedPreviewUrl ?? asset.thumbnail;
+  const handlePreviewError = () => {
+    if (!previewBroken && fileFallbackUrl && previewUrl !== fileFallbackUrl) {
+      setPreviewBroken(true);
+    }
+  };
   const isThumbnailOnly = !localPreviewUrl && !storedPreviewUrl && Boolean(asset.thumbnail);
   const canOpen = Boolean(openPath) && (status === "sent" || status === "received" || status === "saved");
   const isDownloadPending = status === "queued" && Boolean(onDownload);
@@ -42,6 +53,7 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
             <img
               src={previewUrl}
               alt={asset.name}
+              onError={handlePreviewError}
               onClick={() => {
                 if (!isActive) setPreviewOpen(true);
               }}
@@ -159,7 +171,7 @@ export function ImageCard({ asset, status, progress, variant = "card", onDownloa
             </button>
           </div>
           <button type="button" onClick={() => setPreviewOpen(false)} className="grid min-h-0 flex-1 place-items-center p-3">
-            <img src={previewUrl} alt={asset.name} className="max-h-full max-w-full object-contain shadow-2xl" />
+            <img src={previewUrl} alt={asset.name} onError={handlePreviewError} className="max-h-full max-w-full object-contain shadow-2xl" />
           </button>
         </div>
       ) : null}

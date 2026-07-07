@@ -113,6 +113,18 @@ export function selectPendingConnectionMessages(messages: ChatMessage[], convers
   );
 }
 
+// Our own text messages that were sent but never acked (ack moves them to
+// "received"). Safe to resend on reconnect: the receiver dedupes by message id.
+export function selectUnackedTextMessages(messages: ChatMessage[], conversationId: string): ChatMessage[] {
+  return messages.filter(
+    (message) =>
+      message.sender === "me" &&
+      message.status === "sent" &&
+      (message.kind === "text" || message.kind === "link" || message.kind === "code") &&
+      (message.conversationId ?? DEFAULT_CONVERSATION_ID) === conversationId
+  );
+}
+
 const defaultSettings: KunoSettings = {
   localPeerId: createLocalPeerId(),
   displayName: "Atsushi",
@@ -350,6 +362,11 @@ export const useChatStore = create<ChatStore>()(
       markMessageStatus: (messageId, status) =>
         set((state) => {
           const target = state.messages.find((message) => message.id === messageId);
+          // Cancelled is terminal (retry uses resetMessageForRetry, not this path),
+          // so a late ack/pause/resume event cannot un-cancel a message.
+          if (target?.status === "cancelled" && status !== "cancelled") {
+            return {};
+          }
           const nextTransferStates = { ...state.transferStates };
           if (target) {
             for (const transferId of transferIdsForMessage(target)) {
@@ -688,6 +705,10 @@ export const useChatStore = create<ChatStore>()(
           const now = Date.now();
           const prev = state.transferStates[transferId];
           const message = state.messages.find((candidate) => candidate.id === messageId);
+          // "cancelled" is terminal: a late progress event must not revive it.
+          if (message?.status === "cancelled") {
+            return {};
+          }
           const activeStatus = message?.sender === "me" ? "sending" : "receiving";
 
           let speed: number | undefined = prev?.speed;
@@ -750,6 +771,11 @@ export const useChatStore = create<ChatStore>()(
       completeTransfer: ({ messageId, transferId, objectUrl, savePath, sha256 }) =>
         set((state) => {
           const target = state.messages.find((message) => message.id === messageId);
+          // Cancelled is terminal: a completion event arriving after the user
+          // cancelled must not flip the message back to "sent".
+          if (target?.status === "cancelled") {
+            return {};
+          }
           if (target && target.asset && target.asset.transferId === transferId) {
             void dbService.logTransfer({
               id: transferId,
@@ -781,29 +807,34 @@ export const useChatStore = create<ChatStore>()(
               if (message.id !== messageId) {
                 return message;
               }
+              const assetSavePath = savePath || message.asset?.savePath;
               const nextAsset = message.asset
                 ? {
                     ...message.asset,
                     progress: 100,
-                    previewUrl: objectUrl || message.asset.previewUrl,
-                    savePath: savePath || message.asset.savePath,
+                    // With a saved file, prefer the on-disk source (restored via
+                    // useLocalImagePreview after restart) over a transient blob URL.
+                    previewUrl: assetSavePath ? nonBlobPreviewUrl(message.asset.previewUrl) : objectUrl || message.asset.previewUrl,
+                    savePath: assetSavePath,
                     sha256: sha256 || message.asset.sha256
                   }
                 : message.asset;
               const nextBundle = message.bundle
                 ? {
                     ...message.bundle,
-                    items: message.bundle.items.map((item) =>
-                      item.transferId === transferId
-                        ? {
-                            ...item,
-                            progress: 100,
-                            previewUrl: objectUrl || item.previewUrl,
-                            savePath: savePath || item.savePath,
-                            sha256: sha256 || item.sha256
-                          }
-                        : item
-                    )
+                    items: message.bundle.items.map((item) => {
+                      if (item.transferId !== transferId) {
+                        return item;
+                      }
+                      const itemSavePath = savePath || item.savePath;
+                      return {
+                        ...item,
+                        progress: 100,
+                        previewUrl: itemSavePath ? nonBlobPreviewUrl(item.previewUrl) : objectUrl || item.previewUrl,
+                        savePath: itemSavePath,
+                        sha256: sha256 || item.sha256
+                      };
+                    })
                   }
                 : message.bundle;
               const complete = nextBundle ? nextBundle.items.every((item) => (item.progress ?? 0) >= 100) : true;
@@ -829,6 +860,10 @@ export const useChatStore = create<ChatStore>()(
       failTransfer: ({ messageId, transferId, message }) =>
         set((state) => {
           const target = state.messages.find((chatMessage) => chatMessage.id === messageId);
+          // Cancelled is terminal; do not overwrite it with a failed state.
+          if (target?.status === "cancelled") {
+            return {};
+          }
           if (target && target.asset && target.asset.transferId === transferId) {
             void dbService.logTransfer({
               id: transferId,
@@ -1178,7 +1213,7 @@ export const useChatStore = create<ChatStore>()(
     }),
     {
       name: "kunochat-local-state",
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => createQuotaSafeStorage()),
       partialize: (state) => ({
         messages: serializeMessagesForStorage(state.messages),
         deliveryOutbox: state.deliveryOutbox,
@@ -1255,14 +1290,61 @@ function sanitizePersistedMessages(messages: unknown, fallback: ChatMessage[]): 
   }));
 }
 
+const MAX_PERSISTED_THUMBNAIL_BYTES = 32 * 1024;
+const QUOTA_RECOVERY_MESSAGE_LIMIT = 100;
+
+// Wraps localStorage so a QuotaExceededError never corrupts persistence or
+// crashes startup. On overflow it retries once with the message history trimmed
+// to the most recent QUOTA_RECOVERY_MESSAGE_LIMIT entries; if that still fails,
+// it gives up silently and the app keeps running with in-memory state.
+export function createQuotaSafeStorage(backing: Storage = localStorage): Storage {
+  return {
+    get length() {
+      return backing.length;
+    },
+    clear: () => backing.clear(),
+    key: (index: number) => backing.key(index),
+    getItem: (key: string) => backing.getItem(key),
+    removeItem: (key: string) => backing.removeItem(key),
+    setItem: (key: string, value: string) => {
+      try {
+        backing.setItem(key, value);
+      } catch (error) {
+        console.error("[chatStore] persist failed (quota?), trimming message history", error);
+        try {
+          const parsed = JSON.parse(value) as { state?: { messages?: unknown[] } };
+          if (parsed?.state && Array.isArray(parsed.state.messages)) {
+            parsed.state.messages = parsed.state.messages.slice(-QUOTA_RECOVERY_MESSAGE_LIMIT);
+            backing.setItem(key, JSON.stringify(parsed));
+            return;
+          }
+        } catch (retryError) {
+          console.error("[chatStore] persist recovery failed; continuing in memory", retryError);
+        }
+      }
+    }
+  };
+}
+
+// A base64 thumbnail larger than the cap is dropped from persistence: it would
+// otherwise bloat localStorage toward the quota. The image still shows from the
+// saved file (useLocalImagePreview) after a restart.
+function withoutOversizedThumbnail<T extends { thumbnail?: string }>(asset: T): T {
+  if (asset.thumbnail && asset.thumbnail.length > MAX_PERSISTED_THUMBNAIL_BYTES) {
+    const { thumbnail: _thumbnail, ...rest } = asset;
+    return rest as T;
+  }
+  return asset;
+}
+
 function serializeMessagesForStorage(messages: ChatMessage[]): ChatMessage[] {
   return messages.slice(-MAX_PERSISTED_MESSAGES).map((message) => ({
     ...message,
-    asset: message.asset ? withoutFile(message.asset) : undefined,
+    asset: message.asset ? withoutOversizedThumbnail(withoutFile(message.asset)) : undefined,
     bundle: message.bundle
       ? {
           ...message.bundle,
-          items: message.bundle.items.map(withoutFile)
+          items: message.bundle.items.map((item) => withoutOversizedThumbnail(withoutFile(item)))
         }
       : undefined
   }));
@@ -1337,6 +1419,12 @@ function sanitizePersistedConversationDrafts(value: unknown, activeConversationI
     [activeConversationId]: { draftText: "", attachments: [] },
     ...drafts
   };
+}
+
+// A blob: URL does not survive a page reload, so once a file is saved to disk we
+// drop transient blob previews and keep only durable ones (e.g. data URLs).
+function nonBlobPreviewUrl(previewUrl?: string): string | undefined {
+  return previewUrl && !previewUrl.startsWith("blob:") ? previewUrl : undefined;
 }
 
 function withoutFile<T extends { file?: File; previewUrl?: string }>(asset: T): T {

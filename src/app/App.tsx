@@ -9,7 +9,7 @@ import { PairingScreen } from "../components/PairingScreen";
 import { SettingsScreen } from "../components/SettingsScreen";
 import { WindowShell } from "../components/WindowShell";
 import { HistoryTab } from "../components/HistoryTab";
-import { DEFAULT_CONVERSATION_ID, selectPendingConnectionMessages, useChatStore } from "../features/chat/chatStore";
+import { DEFAULT_CONVERSATION_ID, selectPendingConnectionMessages, selectUnackedTextMessages, useChatStore } from "../features/chat/chatStore";
 import { runtimeConfig } from "../features/config/runtimeConfig";
 import type { ChatMessage, ConnectionStatus, ConversationSummary, DraftAttachment, TrustedPeer } from "../features/chat/messageTypes";
 import { platformAdapter, type DurableTransferSession } from "../features/native/platformAdapter";
@@ -1401,6 +1401,24 @@ export function App() {
         await retryMessage(message.id, async (retryingMessage) => {
           await sendRealtimeMessage(retryingMessage);
         });
+      } finally {
+        pendingDeliveryIdsRef.current.delete(message.id);
+      }
+    }
+
+    // Re-deliver our own text messages that were "sent" but never acked (e.g. the
+    // ack was lost across a reconnect). The receiver dedupes by message id, so
+    // this is idempotent and keeps the status at "sent" until an ack arrives.
+    const unackedText = selectUnackedTextMessages(useChatStore.getState().messages, boundConversationId);
+    for (const message of unackedText) {
+      if (pendingDeliveryIdsRef.current.has(message.id)) {
+        continue;
+      }
+      pendingDeliveryIdsRef.current.add(message.id);
+      try {
+        await sendRealtimeMessage(message);
+      } catch {
+        // Best-effort re-delivery; a genuine failure will surface via onError.
       } finally {
         pendingDeliveryIdsRef.current.delete(message.id);
       }

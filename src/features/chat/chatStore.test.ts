@@ -913,6 +913,107 @@ describe("stablePeerId and conversation identity", () => {
   });
 });
 
+describe("cancelled is a terminal state (F-B2 / BUG-013)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.setSystemTime(new Date("2026-06-11T12:00:00Z"));
+    resetStore();
+  });
+
+  function seedSendingAsset() {
+    useChatStore.setState((state) => ({
+      messages: [
+        ...state.messages,
+        {
+          id: "asset1",
+          conversationId: DEFAULT_CONVERSATION_ID,
+          kind: "file",
+          sender: "me",
+          senderId: "me",
+          senderName: "Me",
+          createdAt: 1,
+          status: "sending",
+          asset: { id: "a1", kind: "file", name: "f.bin", size: 10, mime: "application/octet-stream", transferId: "tr1", localPath: "/tmp/f.bin" }
+        }
+      ]
+    }));
+  }
+
+  test("completeTransfer after cancel keeps cancelled status", () => {
+    seedSendingAsset();
+    useChatStore.getState().cancelMessage("asset1");
+    expect(useChatStore.getState().messages.find((m) => m.id === "asset1")?.status).toBe("cancelled");
+    useChatStore.getState().completeTransfer({ messageId: "asset1", transferId: "tr1", savePath: "/x/f.bin" });
+    expect(useChatStore.getState().messages.find((m) => m.id === "asset1")?.status).toBe("cancelled");
+  });
+
+  test("failTransfer and progress after cancel are ignored", () => {
+    seedSendingAsset();
+    useChatStore.getState().cancelMessage("asset1");
+    useChatStore.getState().failTransfer({ messageId: "asset1", transferId: "tr1", message: "boom" });
+    useChatStore.getState().updateTransferProgress({ messageId: "asset1", transferId: "tr1", progress: 50 });
+    useChatStore.getState().markMessageStatus("asset1", "received");
+    expect(useChatStore.getState().messages.find((m) => m.id === "asset1")?.status).toBe("cancelled");
+  });
+});
+
+describe("createQuotaSafeStorage (F-B5)", () => {
+  test("persist setItem quota error does not throw and trims history", async () => {
+    const { createQuotaSafeStorage } = await import("./chatStore");
+    const store = new Map<string, string>();
+    let firstCall = true;
+    const backing = {
+      get length() {
+        return store.size;
+      },
+      clear: () => store.clear(),
+      key: (i: number) => Array.from(store.keys())[i] ?? null,
+      getItem: (k: string) => store.get(k) ?? null,
+      removeItem: (k: string) => void store.delete(k),
+      setItem: (k: string, v: string) => {
+        if (firstCall) {
+          firstCall = false;
+          throw new DOMException("quota", "QuotaExceededError");
+        }
+        store.set(k, v);
+      }
+    } as unknown as Storage;
+
+    const safe = createQuotaSafeStorage(backing);
+    const bigPayload = JSON.stringify({ state: { messages: Array.from({ length: 500 }, (_, i) => ({ id: `m${i}` })) } });
+    expect(() => safe.setItem("kunochat-local-state", bigPayload)).not.toThrow();
+    // Recovery retry succeeded with a trimmed message list.
+    const stored = JSON.parse(store.get("kunochat-local-state")!);
+    expect(stored.state.messages).toHaveLength(100);
+  });
+});
+
+describe("selectUnackedTextMessages (F-B1)", () => {
+  test("selects only own sent text in the bound conversation", async () => {
+    const { selectUnackedTextMessages } = await import("./chatStore");
+    const base = (id: string, over: Record<string, unknown>) => ({
+      id,
+      conversationId: "conv_A",
+      kind: "text" as const,
+      sender: "me" as const,
+      senderId: "me",
+      senderName: "Me",
+      createdAt: 1,
+      status: "sent" as const,
+      text: { text: "hi", plainText: "hi", length: 2 },
+      ...over
+    });
+    const messages = [
+      base("t1", {}),
+      base("t2", { status: "received" }), // acked already
+      base("t3", { sender: "peer" }), // not ours
+      base("t4", { conversationId: "conv_B" }), // other conversation
+      base("t5", { kind: "file", status: "sent" }) // not text
+    ] as any;
+    expect(selectUnackedTextMessages(messages, "conv_A").map((m: any) => m.id)).toEqual(["t1"]);
+  });
+});
+
 describe("selectPendingConnectionMessages", () => {
   test("flush_filter_selects_only_bound_conversation", async () => {
     const { selectPendingConnectionMessages } = await import("./chatStore");

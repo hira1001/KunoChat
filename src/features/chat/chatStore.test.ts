@@ -783,3 +783,158 @@ describe("chatStore", () => {
     expect(storedMsg?.asset?.thumbnail).toBe("data:image/jpeg;base64,abc");
   });
 });
+
+describe("stablePeerId and conversation identity", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.setSystemTime(new Date("2026-06-11T12:00:00Z"));
+    resetStore();
+  });
+
+  test("stores_stable_peer_id_without_changing_conversation_id", () => {
+    const id = useChatStore.getState().activateConversation({
+      peerId: "192.168.1.20",
+      displayName: "Desktop",
+      peerHint: "192.168.1.20"
+    });
+    useChatStore.getState().setConversationStablePeerId(id, "peer_stable_x");
+    const conversation = useChatStore.getState().conversations.find((c) => c.id === id);
+    expect(conversation?.id).toBe(id);
+    expect(conversation?.stablePeerId).toBe("peer_stable_x");
+    // The IP-derived peerId must be untouched so the id doesn't fork.
+    expect(conversation?.peerId).toBe("192.168.1.20");
+  });
+
+  test("adopt with unknown fingerprint only tags conversation", () => {
+    const id = useChatStore.getState().activateConversation({
+      peerId: "192.168.1.20",
+      displayName: "Desktop",
+      peerHint: "192.168.1.20"
+    });
+    const trustedPeer = { publicKey: "a".repeat(64), fingerprint: "fp-new", verifiedAt: 1 };
+    const target = useChatStore.getState().adoptConversationIdentity(id, trustedPeer);
+    expect(target).toBe(id);
+    const conversation = useChatStore.getState().conversations.find((c) => c.id === id);
+    expect(conversation?.fingerprint).toBe("fp-new");
+    expect(useChatStore.getState().conversations).toHaveLength(2); // default + this one
+  });
+
+  test("adoptConversationIdentity merges split conversations by fingerprint", () => {
+    const store = useChatStore.getState();
+    const fingerprint = "fp-shared";
+    // Canonical (older) tab, connected over Wi-Fi, already trusted.
+    const canonicalId = store.activateConversation({ peerId: "192.168.1.20", displayName: "Desktop", peerHint: "192.168.1.20" });
+    store.setConversationTrustedPeer(canonicalId, { publicKey: "a".repeat(64), fingerprint, verifiedAt: 1 });
+    // Give the canonical tab a message + outbox record + unread.
+    useChatStore.setState((state) => ({
+      messages: [
+        ...state.messages,
+        {
+          id: "old_msg",
+          conversationId: canonicalId,
+          kind: "text",
+          sender: "me",
+          senderId: "me",
+          senderName: "Me",
+          createdAt: 1,
+          status: "sent",
+          text: { text: "hi", plainText: "hi", length: 2 }
+        }
+      ],
+      deliveryOutbox: [
+        ...state.deliveryOutbox,
+        {
+          id: "ob_old",
+          messageId: "old_msg",
+          conversationId: canonicalId,
+          payloadKind: "text",
+          sizeBytes: 2,
+          route: "p2p",
+          status: "peer_delivered",
+          attempts: 1,
+          idempotencyKey: "k_old",
+          createdAt: 1,
+          updatedAt: 1
+        }
+      ],
+      conversations: state.conversations.map((c) => (c.id === canonicalId ? { ...c, unreadCount: 2 } : c))
+    }));
+
+    // Same device reconnects over Tailscale → new IP-keyed split tab, becomes active.
+    const splitId = useChatStore.getState().activateConversation({ peerId: "100.100.123.107", displayName: "Desktop (TS)", peerHint: "100.100.123.107", source: "tailscale" });
+    useChatStore.setState((state) => ({
+      messages: [
+        ...state.messages,
+        {
+          id: "new_msg",
+          conversationId: splitId,
+          kind: "text",
+          sender: "peer",
+          senderId: "peer",
+          senderName: "Desktop",
+          createdAt: 5,
+          status: "received",
+          text: { text: "yo", plainText: "yo", length: 2 }
+        }
+      ],
+      deliveryOutbox: [
+        ...state.deliveryOutbox,
+        {
+          id: "ob_new",
+          messageId: "new_msg",
+          conversationId: splitId,
+          payloadKind: "text",
+          sizeBytes: 2,
+          route: "p2p",
+          status: "local_queued",
+          attempts: 0,
+          idempotencyKey: "k_new",
+          createdAt: 5,
+          updatedAt: 5
+        }
+      ],
+      conversations: state.conversations.map((c) => (c.id === splitId ? { ...c, unreadCount: 3 } : c))
+    }));
+
+    const target = useChatStore.getState().adoptConversationIdentity(splitId, { publicKey: "a".repeat(64), fingerprint, verifiedAt: 6 });
+    expect(target).toBe(canonicalId);
+
+    const state = useChatStore.getState();
+    // Split tab is gone; both messages and both outbox records now belong to canonical.
+    expect(state.conversations.find((c) => c.id === splitId)).toBeUndefined();
+    expect(state.messages.filter((m) => m.conversationId === canonicalId)).toHaveLength(2);
+    expect(state.deliveryOutbox.filter((o) => o.conversationId === canonicalId)).toHaveLength(2);
+    const merged = state.conversations.find((c) => c.id === canonicalId);
+    expect(merged?.unreadCount).toBe(5); // 2 + 3
+    expect(merged?.peerHint).toBe("100.100.123.107"); // latest connection route
+    expect(merged?.source).toBe("tailscale");
+    // Active follows the merge.
+    expect(state.activeConversationId).toBe(canonicalId);
+  });
+});
+
+describe("selectPendingConnectionMessages", () => {
+  test("flush_filter_selects_only_bound_conversation", async () => {
+    const { selectPendingConnectionMessages } = await import("./chatStore");
+    const baseMessage = (id: string, conversationId: string) => ({
+      id,
+      conversationId,
+      kind: "text" as const,
+      sender: "me" as const,
+      senderId: "me",
+      senderName: "Me",
+      createdAt: 1,
+      status: "queued" as const,
+      error: { code: "pending_connection", message: "waiting" },
+      text: { text: "hi", plainText: "hi", length: 2 }
+    });
+    const messages = [
+      baseMessage("a1", "conv_A"),
+      baseMessage("b1", "conv_B"),
+      { ...baseMessage("a2", "conv_A"), status: "sent" as const, error: undefined } // not pending
+    ];
+    const selected = selectPendingConnectionMessages(messages, "conv_A");
+    expect(selected.map((m) => m.id)).toEqual(["a1"]);
+    expect(selectPendingConnectionMessages(messages, "conv_B").map((m) => m.id)).toEqual(["b1"]);
+  });
+});

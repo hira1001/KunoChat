@@ -1,7 +1,8 @@
-import { Check, ChevronLeft, Copy, Laptop, Loader2, ShieldCheck, Wifi, WifiOff } from "lucide-react";
+import { AlertTriangle, Check, ChevronLeft, Copy, Laptop, Loader2, ShieldCheck, Wifi, WifiOff } from "lucide-react";
 import clsx from "clsx";
 import { useState, type FormEvent } from "react";
 import type { ConnectionStatus } from "../features/chat/messageTypes";
+import { peerReachabilitySummary } from "../features/diagnostics/diagnosticsService";
 import { BrandMark } from "./BrandMark";
 
 type DetectedPeerOption = {
@@ -13,6 +14,7 @@ type DetectedPeerOption = {
   source?: "lan" | "tailscale";
   deviceName?: string;
   platform?: string;
+  reachable?: boolean;
   lastSeen: number;
 };
 
@@ -133,28 +135,45 @@ export function PairingScreen({
             </div>
             <div className="mt-2 space-y-2">
               {detectedPeers.length > 0 ? (
-                detectedPeers.map((peer) => {
+                sortPeersByReachability(detectedPeers).map((peer) => {
                   const selected = peer.id === selectedPeerId;
+                  const unreachable = peer.reachable === false;
+                  const summary = peerReachabilitySummary(peer);
                   return (
                     <button
                       key={peer.id}
                       type="button"
                       onClick={() => onConnectDetectedPeer(peer)}
+                      title={unreachable ? summary.guidance : undefined}
                       className={clsx(
                         "kuno-focus-ring flex min-h-14 w-full min-w-0 items-center gap-3 rounded-input border px-3 py-2 text-left transition-colors",
-                        selected ? "border-accent bg-accent-soft" : "border-border bg-surface hover:border-accent hover:bg-surface-hover"
+                        selected
+                          ? "border-accent bg-accent-soft"
+                          : unreachable
+                            ? "border-amber-200 bg-amber-50/60 hover:border-amber-300 dark:border-amber-500/30 dark:bg-amber-950/20"
+                            : "border-border bg-surface hover:border-accent hover:bg-surface-hover"
                       )}
                     >
-                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent-soft text-accent">
-                        <Laptop className="h-4 w-4" />
+                      <span
+                        className={clsx(
+                          "grid h-8 w-8 shrink-0 place-items-center rounded-full",
+                          unreachable ? "bg-amber-100 text-amber-600 dark:bg-amber-950/40 dark:text-amber-300" : "bg-accent-soft text-accent"
+                        )}
+                      >
+                        {unreachable ? <AlertTriangle className="h-4 w-4" /> : <Laptop className="h-4 w-4" />}
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px] font-semibold text-text">{peer.deviceName || peer.peerHint}</span>
                         <span className="mt-0.5 block truncate text-[11px] text-muted">
                           {peerPlatformLabel(peer.platform)} / {peer.source === "tailscale" ? "Tailscale" : "LAN"} / {peer.peerHint}
                         </span>
+                        {unreachable ? (
+                          <span className="mt-0.5 block truncate text-[10px] font-semibold text-amber-600 dark:text-amber-300">{summary.label}</span>
+                        ) : null}
                       </span>
-                      <span className="shrink-0 text-[12px] font-semibold text-accent">{selected ? "接続中" : "接続"}</span>
+                      <span className={clsx("shrink-0 text-[12px] font-semibold", unreachable ? "text-amber-600 dark:text-amber-300" : "text-accent")}>
+                        {selected ? "接続中" : unreachable ? "応答なし" : "接続"}
+                      </span>
                     </button>
                   );
                 })
@@ -209,6 +228,17 @@ function PairingStatus({ status }: { status: ConnectionStatus }) {
       {connected ? "接続済み" : connecting ? "接続中" : failed ? "失敗" : "待機中"}
     </span>
   );
+}
+
+function sortPeersByReachability(peers: DetectedPeerOption[]): DetectedPeerOption[] {
+  return [...peers].sort((left, right) => {
+    const leftDown = left.reachable === false ? 1 : 0;
+    const rightDown = right.reachable === false ? 1 : 0;
+    if (leftDown !== rightDown) {
+      return leftDown - rightDown;
+    }
+    return right.lastSeen - left.lastSeen;
+  });
 }
 
 function pairingDigits(value: string): string {

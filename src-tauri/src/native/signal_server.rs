@@ -30,6 +30,13 @@ const MAX_SIGNAL_CONNECTIONS: usize = 64;
 const SIGNAL_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(6);
 const SIGNAL_RATE_WINDOW: Duration = Duration::from_secs(10);
 const MAX_SIGNAL_MESSAGES_PER_WINDOW: u32 = 120;
+const SIGNAL_PING_INTERVAL: Duration = Duration::from_secs(30);
+const SIGNAL_IDLE_TIMEOUT: Duration = Duration::from_secs(75); // ~2 missed pings
+
+/// The signaling connection protocol version advertised in a
+/// connection-request-ack. v2 means the acceptor understands deterministic
+/// room/role negotiation (the requester may pass `requesterRole`).
+const SIGNAL_PROTO_VERSION: u32 = 2;
 
 #[derive(Clone)]
 struct Peer {
@@ -103,7 +110,32 @@ async fn handle_connection(app: AppHandle, stream: TcpStream, rooms: Rooms) -> R
     let mut rate_window_started = Instant::now();
     let mut messages_in_window = 0_u32;
 
-    while let Some(raw) = read.next().await {
+    // Periodic ping + idle reaping: a peer that drops its TCP connection without
+    // a close frame would otherwise keep its room slot forever (blocking the
+    // 2-peer room and the 64-connection budget). We also break — not return —
+    // on every error so the cleanup below always runs.
+    let mut ping_interval = tokio::time::interval(SIGNAL_PING_INTERVAL);
+    ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut last_activity = Instant::now();
+
+    let result: Result<(), String> = loop {
+        let raw = tokio::select! {
+            _ = ping_interval.tick() => {
+                if should_reap(last_activity, Instant::now()) {
+                    break Err("signaling connection idle timeout".to_string());
+                }
+                let _ = tx.try_send(Message::Ping(Vec::new().into()));
+                continue;
+            }
+            raw = read.next() => match raw {
+                Some(raw) => raw,
+                None => break Ok(()),
+            },
+        };
+
+        // Any received frame (text, pong, ping, binary) proves liveness.
+        last_activity = Instant::now();
+
         if exceeds_rate_limit(
             &mut rate_window_started,
             &mut messages_in_window,
@@ -113,16 +145,22 @@ async fn handle_connection(app: AppHandle, stream: TcpStream, rooms: Rooms) -> R
                 &tx,
                 json!({ "type": "error", "message": "signaling rate limit exceeded." }),
             );
-            return Err("signaling rate limit exceeded".to_string());
+            break Err("signaling rate limit exceeded".to_string());
         }
-        let raw = raw.map_err(|error| error.to_string())?;
+        let raw = match raw {
+            Ok(raw) => raw,
+            Err(error) => break Err(error.to_string()),
+        };
         if raw.is_close() {
-            break;
+            break Ok(());
         }
         if !raw.is_text() {
             continue;
         }
-        let raw_text = raw.to_text().map_err(|error| error.to_string())?;
+        let raw_text = match raw.to_text() {
+            Ok(text) => text,
+            Err(error) => break Err(error.to_string()),
+        };
         if raw_text.len() > MAX_SIGNAL_MESSAGE_BYTES {
             send_json(
                 &tx,
@@ -131,8 +169,10 @@ async fn handle_connection(app: AppHandle, stream: TcpStream, rooms: Rooms) -> R
             continue;
         }
 
-        let message: Value =
-            serde_json::from_str(raw_text).map_err(|_| "invalid JSON".to_string())?;
+        let message: Value = match serde_json::from_str(raw_text) {
+            Ok(value) => value,
+            Err(_) => break Err("invalid JSON".to_string()),
+        };
         let message_type = message.get("type").and_then(Value::as_str).unwrap_or("");
 
         if message_type == "connection-request" {
@@ -159,6 +199,7 @@ async fn handle_connection(app: AppHandle, stream: TcpStream, rooms: Rooms) -> R
                 .chars()
                 .take(128)
                 .collect::<String>();
+            let requester_role = message.get("requesterRole").and_then(Value::as_str);
 
             if request_id.is_empty() || room_id.is_empty() || !is_valid_peer_id(&requester_peer_id)
             {
@@ -169,20 +210,21 @@ async fn handle_connection(app: AppHandle, stream: TcpStream, rooms: Rooms) -> R
                 continue;
             }
 
-            let payload = json!({
-                "requestId": request_id,
-                "roomId": room_id,
-                "requesterName": requester_name,
-                "requesterPeerId": requester_peer_id,
-                "peerHint": remote_ip
-            });
+            let payload = build_connection_request_payload(
+                &request_id,
+                &room_id,
+                &requester_name,
+                &requester_peer_id,
+                requester_role,
+                &remote_ip,
+            );
             let _ = app.emit("kuno:connection-request", payload);
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
                 let _ = app.emit("kuno:navigate", "main");
             }
-            send_json(&tx, json!({ "type": "connection-request-ack", "requestId": request_id }));
+            send_json(&tx, connection_request_ack(&request_id));
             continue;
         }
 
@@ -225,7 +267,7 @@ async fn handle_connection(app: AppHandle, stream: TcpStream, rooms: Rooms) -> R
             current_room = next_room;
             current_peer = next_peer;
 
-            let existing_peers = join_room(
+            let existing_peers = match join_room(
                 &rooms,
                 &current_room,
                 Peer {
@@ -234,7 +276,10 @@ async fn handle_connection(app: AppHandle, stream: TcpStream, rooms: Rooms) -> R
                     connection_id,
                     tx: tx.clone(),
                 },
-            )?;
+            ) {
+                Ok(peers) => peers,
+                Err(error) => break Err(error),
+            };
             send_json(&tx, json!({ "type": "peers", "peers": existing_peers }));
             broadcast(
                 &rooms,
@@ -271,8 +316,10 @@ async fn handle_connection(app: AppHandle, stream: TcpStream, rooms: Rooms) -> R
                 }),
             );
         }
-    }
+    };
 
+    // Runs on EVERY exit path (clean close, read error, rate limit, idle reap),
+    // so a dropped peer never leaks its room slot.
     if leave_room(&rooms, &current_room, &current_peer, connection_id) {
         broadcast(
             &rooms,
@@ -282,7 +329,48 @@ async fn handle_connection(app: AppHandle, stream: TcpStream, rooms: Rooms) -> R
         );
     }
     writer.abort();
-    Ok(())
+    result
+}
+
+fn should_reap(last_activity: Instant, now: Instant) -> bool {
+    now.duration_since(last_activity) >= SIGNAL_IDLE_TIMEOUT
+}
+
+fn connection_request_ack(request_id: &str) -> Value {
+    json!({
+        "type": "connection-request-ack",
+        "requestId": request_id,
+        "proto": SIGNAL_PROTO_VERSION
+    })
+}
+
+fn normalize_requester_role(role: Option<&str>) -> Option<&'static str> {
+    match role {
+        Some("host") => Some("host"),
+        Some("join") => Some("join"),
+        _ => None,
+    }
+}
+
+fn build_connection_request_payload(
+    request_id: &str,
+    room_id: &str,
+    requester_name: &str,
+    requester_peer_id: &str,
+    requester_role: Option<&str>,
+    peer_hint: &str,
+) -> Value {
+    let mut payload = json!({
+        "requestId": request_id,
+        "roomId": room_id,
+        "requesterName": requester_name,
+        "requesterPeerId": requester_peer_id,
+        "peerHint": peer_hint
+    });
+    if let Some(role) = normalize_requester_role(requester_role) {
+        payload["requesterRole"] = json!(role);
+    }
+    payload
 }
 
 fn exceeds_rate_limit(
@@ -417,6 +505,48 @@ mod tests {
             &mut count,
             now + SIGNAL_RATE_WINDOW
         ));
+    }
+
+    #[test]
+    fn reaps_connection_after_idle_timeout() {
+        let now = Instant::now();
+        let last_activity = now - SIGNAL_IDLE_TIMEOUT - Duration::from_secs(1);
+        assert!(should_reap(last_activity, now));
+    }
+
+    #[test]
+    fn keeps_recently_active_connection() {
+        let now = Instant::now();
+        let last_activity = now - Duration::from_secs(5);
+        assert!(!should_reap(last_activity, now));
+    }
+
+    #[test]
+    fn connection_request_ack_advertises_proto_2() {
+        let ack = connection_request_ack("req-1");
+        assert_eq!(ack["type"], json!("connection-request-ack"));
+        assert_eq!(ack["requestId"], json!("req-1"));
+        assert_eq!(ack["proto"], json!(2));
+    }
+
+    #[test]
+    fn connection_request_payload_passes_valid_requester_role() {
+        let payload =
+            build_connection_request_payload("r", "123456", "Peer", "peer_a", Some("host"), "10.0.0.2");
+        assert_eq!(payload["requesterRole"], json!("host"));
+        let payload_join =
+            build_connection_request_payload("r", "123456", "Peer", "peer_a", Some("join"), "10.0.0.2");
+        assert_eq!(payload_join["requesterRole"], json!("join"));
+    }
+
+    #[test]
+    fn connection_request_payload_omits_invalid_requester_role() {
+        let payload =
+            build_connection_request_payload("r", "123456", "Peer", "peer_a", Some("admin"), "10.0.0.2");
+        assert!(payload.get("requesterRole").is_none());
+        let payload_none =
+            build_connection_request_payload("r", "123456", "Peer", "peer_a", None, "10.0.0.2");
+        assert!(payload_none.get("requesterRole").is_none());
     }
 
     #[test]

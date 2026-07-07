@@ -1,7 +1,9 @@
 mod commands;
 mod native;
 
-use commands::{fs, identity, notification, opener, platform, transfer_session, updater, window};
+use commands::{
+    diagnostics, fs, identity, notification, opener, platform, transfer_session, updater, window,
+};
 use tauri::{Manager, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -89,6 +91,9 @@ pub fn run() {
             updater::download_and_open_installer,
             notification::notify_message,
             notification::notify_file_received,
+            diagnostics::collect_network_diagnostics,
+            diagnostics::probe_peer_ports,
+            diagnostics::repair_firewall_rules,
             platform::get_platform_info,
             platform::register_app_shortcuts,
             platform::set_app_shortcut,

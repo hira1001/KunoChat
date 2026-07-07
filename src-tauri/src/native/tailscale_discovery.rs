@@ -12,33 +12,34 @@ const SIGNALING_PORT: u16 = 8787;
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(2);
 const DISCOVERY_ERROR_BACKOFF: Duration = Duration::from_secs(60);
 const REEMIT_AFTER: Duration = Duration::from_secs(5);
+const UNREACHABLE_REEMIT_AFTER: Duration = Duration::from_secs(15);
 
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
-struct TailscaleStatus {
+pub(crate) struct TailscaleStatus {
     #[serde(rename = "Self")]
-    self_node: TailscaleNode,
+    pub(crate) self_node: TailscaleNode,
     #[serde(default)]
-    peer: HashMap<String, TailscaleNode>,
+    pub(crate) peer: HashMap<String, TailscaleNode>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
-struct TailscaleNode {
+pub(crate) struct TailscaleNode {
     #[serde(rename = "ID")]
     #[serde(default)]
-    id: String,
+    pub(crate) id: String,
     #[serde(rename = "DNSName")]
     #[serde(default)]
-    dns_name: String,
+    pub(crate) dns_name: String,
     #[serde(rename = "TailscaleIPs")]
     #[serde(default)]
-    tailscale_ips: Vec<String>,
+    pub(crate) tailscale_ips: Vec<String>,
     #[serde(rename = "OS")]
     #[serde(default)]
-    os: String,
+    pub(crate) os: String,
     #[serde(default)]
-    online: bool,
+    pub(crate) online: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -51,6 +52,7 @@ struct AutoConnectPayload {
     source: String,
     device_name: Option<String>,
     platform: Option<String>,
+    reachable: bool,
 }
 
 struct TailscaleCandidate {
@@ -71,7 +73,7 @@ pub fn start(app: AppHandle) {
 
 async fn run_discovery(app: AppHandle) {
     let mut interval = time::interval(DISCOVERY_INTERVAL);
-    let mut last_candidate: Option<(String, Instant)> = None;
+    let mut recent_emits: HashMap<String, Instant> = HashMap::new();
     let mut next_status_attempt = Instant::now();
 
     loop {
@@ -88,19 +90,24 @@ async fn run_discovery(app: AppHandle) {
         };
         next_status_attempt = now + DISCOVERY_INTERVAL;
         for candidate in select_candidates(&status) {
-            if !is_kunochat_reachable(&candidate.probe_host) {
-                continue;
-            }
+            // A Tailscale-online peer whose KunoChat port is closed is still
+            // emitted (reachable=false) so the UI can say "device online, but
+            // KunoChat is not listening" instead of showing nothing.
+            let reachable = is_kunochat_reachable(&candidate.probe_host);
 
             let key = format!(
-                "{}:{}:{}",
-                candidate.signaling_url, candidate.room_id, candidate.mode
+                "{}:{}:{}:{}",
+                candidate.signaling_url, candidate.room_id, candidate.mode, reachable
             );
+            let window = if reachable {
+                REEMIT_AFTER
+            } else {
+                UNREACHABLE_REEMIT_AFTER
+            };
             let now = Instant::now();
-            if !should_emit_candidate(&last_candidate, &key, now) {
+            if !should_emit_candidate(&mut recent_emits, &key, window, now) {
                 continue;
             }
-            last_candidate = Some((key, now));
 
             let _ = app.emit(
                 "kuno:auto-connect",
@@ -112,26 +119,35 @@ async fn run_discovery(app: AppHandle) {
                     source: "tailscale".to_string(),
                     device_name: candidate.device_name,
                     platform: candidate.platform,
+                    reachable,
                 },
             );
         }
+        prune_recent_emits(&mut recent_emits, Instant::now());
     }
 }
 
 fn should_emit_candidate(
-    last_candidate: &Option<(String, Instant)>,
+    recent_emits: &mut HashMap<String, Instant>,
     key: &str,
+    window: Duration,
     now: Instant,
 ) -> bool {
-    match last_candidate {
-        Some((last_key, last_seen)) if last_key == key => {
-            now.duration_since(*last_seen) >= REEMIT_AFTER
+    if let Some(last_seen) = recent_emits.get(key) {
+        if now.duration_since(*last_seen) < window {
+            return false;
         }
-        _ => true,
     }
+    recent_emits.insert(key.to_string(), now);
+    true
 }
 
-fn read_tailscale_status() -> Result<TailscaleStatus, String> {
+fn prune_recent_emits(recent_emits: &mut HashMap<String, Instant>, now: Instant) {
+    recent_emits
+        .retain(|_, last_seen| now.duration_since(*last_seen) < UNREACHABLE_REEMIT_AFTER * 4);
+}
+
+pub(crate) fn read_tailscale_status() -> Result<TailscaleStatus, String> {
     let mut last_error = String::new();
 
     for command in tailscale_command_candidates() {
@@ -441,17 +457,18 @@ mod tests {
     #[test]
     fn should_emit_new_candidate_immediately() {
         let now = Instant::now();
-        let last_candidate = Some(("old".to_string(), now));
-        assert!(should_emit_candidate(&last_candidate, "new", now));
+        let mut recent = HashMap::from([("old".to_string(), now)]);
+        assert!(should_emit_candidate(&mut recent, "new", REEMIT_AFTER, now));
     }
 
     #[test]
     fn should_suppress_same_candidate_until_reemit_window() {
         let now = Instant::now();
-        let last_candidate = Some(("same".to_string(), now));
+        let mut recent = HashMap::from([("same".to_string(), now)]);
         assert!(!should_emit_candidate(
-            &last_candidate,
+            &mut recent,
             "same",
+            REEMIT_AFTER,
             now + Duration::from_secs(2)
         ));
     }
@@ -459,11 +476,57 @@ mod tests {
     #[test]
     fn should_reemit_same_candidate_after_reemit_window() {
         let now = Instant::now();
-        let last_candidate = Some(("same".to_string(), now));
+        let mut recent = HashMap::from([("same".to_string(), now)]);
         assert!(should_emit_candidate(
-            &last_candidate,
+            &mut recent,
             "same",
+            REEMIT_AFTER,
             now + REEMIT_AFTER
         ));
+    }
+
+    #[test]
+    fn tracks_multiple_candidates_independently() {
+        let now = Instant::now();
+        let mut recent = HashMap::new();
+        assert!(should_emit_candidate(&mut recent, "peer-a", REEMIT_AFTER, now));
+        assert!(should_emit_candidate(&mut recent, "peer-b", REEMIT_AFTER, now));
+        // Re-checking either peer inside the window is suppressed even though
+        // the other peer was emitted in between (the old single-slot dedupe
+        // re-emitted alternating peers every tick).
+        assert!(!should_emit_candidate(
+            &mut recent,
+            "peer-a",
+            REEMIT_AFTER,
+            now + Duration::from_secs(1)
+        ));
+        assert!(!should_emit_candidate(
+            &mut recent,
+            "peer-b",
+            REEMIT_AFTER,
+            now + Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn unreachable_window_is_longer_than_reachable_window() {
+        assert!(UNREACHABLE_REEMIT_AFTER > REEMIT_AFTER);
+    }
+
+    #[test]
+    fn auto_connect_payload_serializes_reachable_flag() {
+        let payload = AutoConnectPayload {
+            signaling_url: "ws://100.64.0.1:8787".to_string(),
+            room_id: "123456".to_string(),
+            mode: "join".to_string(),
+            peer_hint: "100.64.0.2".to_string(),
+            source: "tailscale".to_string(),
+            device_name: Some("HomeDesktop".to_string()),
+            platform: Some("windows".to_string()),
+            reachable: false,
+        };
+        let value = serde_json::to_value(payload).expect("serialize");
+        assert_eq!(value["reachable"], serde_json::json!(false));
+        assert_eq!(value["peerHint"], serde_json::json!("100.64.0.2"));
     }
 }

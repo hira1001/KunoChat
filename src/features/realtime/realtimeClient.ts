@@ -49,11 +49,18 @@ const HEARTBEAT_INTERVAL_MS = 10_000;
 const HEARTBEAT_TIMEOUT_MS = 30_000;
 const MAX_RECONNECT_ATTEMPTS = 12;
 const BINARY_BUFFER_WAIT_TIMEOUT_MS = 30_000;
+const IDENTITY_HANDSHAKE_TIMEOUT_MS = 10_000;
+const STABLE_PEER_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+// Validates an optional stablePeerId carried on identity-hello. Exported for tests.
+export function parseStablePeerId(value: unknown): string | undefined {
+  return typeof value === "string" && STABLE_PEER_ID_PATTERN.test(value) ? value : undefined;
+}
 
 type IdentityHandshake = {
   local?: { publicKey: string; fingerprint: string };
   localNonce?: string;
-  remote?: { senderId: string; publicKey: string; nonce: string; fingerprint: string };
+  remote?: { senderId: string; publicKey: string; nonce: string; fingerprint: string; stablePeerId?: string };
   verified: boolean;
 };
 
@@ -184,6 +191,7 @@ class KunoRealtimeClient {
   private reconnectAttempts = 0;
   private heartbeatTimer?: number;
   private lastHeartbeatAt = 0;
+  private identityTimeoutTimer?: number;
   private manualDisconnect = false;
   private incomingTransfers = new Map<string, IncomingTransfer>();
   private outgoingTransfers = new Map<string, OutgoingTransfer>();
@@ -245,6 +253,7 @@ class KunoRealtimeClient {
 
   private closeTransport() {
     this.stopHeartbeat();
+    this.clearIdentityTimeout();
     if (this.control) {
       this.control.onclose = null;
       this.control.onerror = null;
@@ -985,6 +994,12 @@ class KunoRealtimeClient {
     }
 
     if (message.type === "error") {
+      // A server error (e.g. "room already has two peers") means this attempt
+      // will never succeed. Tear the whole transport down so no stale socket
+      // lingers and no onclose handler schedules a doomed reconnect. Recovery
+      // is App-level: the background worker dials a fresh room later.
+      this.clearReconnectTimer();
+      this.closeTransport();
       this.callbacks?.onStatus("failed");
       this.callbacks?.onError(message.message);
       return;
@@ -1389,7 +1404,8 @@ class KunoRealtimeClient {
         type: "identity-hello",
         senderId: options.localPeerId,
         publicKey: local.publicKey,
-        nonce: identity.localNonce
+        nonce: identity.localNonce,
+        stablePeerId: options.stableLocalPeerId
       });
     } catch (error) {
       this.rejectIdentity(error instanceof Error ? error.message : "Unable to load the local device identity.");
@@ -1429,7 +1445,8 @@ class KunoRealtimeClient {
       }
       identity.remote = {
         ...nextRemote,
-        fingerprint
+        fingerprint,
+        stablePeerId: parseStablePeerId(message.stablePeerId)
       };
       this.acceptIdentityHello(identity, options);
     } catch (error) {
@@ -1442,12 +1459,14 @@ class KunoRealtimeClient {
       return;
     }
 
+    this.clearIdentityTimeout();
     const trustedPeer = options.trustedPeer;
     identity.verified = true;
     this.callbacks?.onIdentity({
       status: identityTrustStatus(trustedPeer, identity.remote),
       publicKey: identity.remote.publicKey,
-      fingerprint: identity.remote.fingerprint
+      fingerprint: identity.remote.fingerprint,
+      stablePeerId: identity.remote.stablePeerId
     });
     this.reconnectAttempts = 0;
     this.callbacks?.onStatus("connected");
@@ -1457,12 +1476,40 @@ class KunoRealtimeClient {
 
   private acceptOpenControlChannel() {
     const identity = this.identity ?? { verified: false };
-    identity.verified = true;
     this.identity = identity;
-    this.reconnectAttempts = 0;
-    this.callbacks?.onStatus("connected");
-    this.startHeartbeat();
-    this.reannouncePendingAssets();
+    // The local-browser transport verifies immediately via acceptLocalPeer;
+    // in every other case we must NOT report "connected" until the peer's
+    // identity-hello is verified (otherwise the UI shows connected while sends
+    // fail with "identity has not been verified").
+    if (identity.verified) {
+      return;
+    }
+    const channel = this.control;
+    if (!channel) {
+      return;
+    }
+    this.startIdentityTimeout();
+    void this.beginIdentityHandshake(channel);
+  }
+
+  private startIdentityTimeout() {
+    this.clearIdentityTimeout();
+    this.identityTimeoutTimer = window.setTimeout(() => {
+      this.identityTimeoutTimer = undefined;
+      if (this.identity?.verified || this.localConnected) {
+        return;
+      }
+      // Do NOT set manualDisconnect: the App-level background worker should be
+      // free to retry with a fresh connect() (which resets manualDisconnect).
+      this.callbacks?.onStatus("failed");
+      this.callbacks?.onError("相手の本人確認が完了しませんでした。相手のKunoChatを最新版にして、もう一度接続してください。");
+      this.closeTransport();
+    }, IDENTITY_HANDSHAKE_TIMEOUT_MS);
+  }
+
+  private clearIdentityTimeout() {
+    window.clearTimeout(this.identityTimeoutTimer);
+    this.identityTimeoutTimer = undefined;
   }
 
   private isCurrentIdentityContext(identity: IdentityHandshake, channel: RTCDataChannel, options: RealtimeConnectOptions) {

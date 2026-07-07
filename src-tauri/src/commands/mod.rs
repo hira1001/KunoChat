@@ -1,3 +1,4 @@
+pub mod diagnostics;
 pub mod fs;
 pub mod identity;
 pub mod notification;

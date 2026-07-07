@@ -19,7 +19,7 @@ export type ConnectionStatus =
   | "offline"
   | "failed";
 
-export type AppView = "mini" | "main" | "pairing" | "settings" | "history";
+export type AppView = "mini" | "main" | "pairing" | "settings" | "history" | "diagnostics";
 
 export type Sender = "me" | "peer" | "system";
 
@@ -112,8 +112,13 @@ export type ConversationSummary = {
   unreadCount: number;
   lastMessageAt?: number;
   lastMessagePreview?: string;
+  lastConnectedAt?: number;
   connectionStatus?: ConnectionStatus;
   trustedPeer?: TrustedPeer;
+  /** The peer's persistent settings.localPeerId, learned via identity-hello or
+   *  connection-request. Used for deterministic room derivation (roomIdForPair)
+   *  and fingerprint-independent of the volatile IP-based conversation id. */
+  stablePeerId?: string;
 };
 
 export type DeliveryOutboxStatus =

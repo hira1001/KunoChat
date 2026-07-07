@@ -1,14 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket as StdUdpSocket},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{async_runtime, AppHandle, Emitter};
-use tokio::{net::UdpSocket, time};
+use tokio::{net::TcpStream, net::UdpSocket, time};
 
 const DISCOVERY_PORT: u16 = 8788;
 const SIGNALING_PORT: u16 = 8787;
 const REEMIT_AFTER: Duration = Duration::from_secs(3);
+const PROBE_TIMEOUT: Duration = Duration::from_millis(450);
+const PROBE_CACHE_TTL: Duration = Duration::from_secs(3);
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +34,7 @@ struct AutoConnectPayload {
     source: String,
     device_name: Option<String>,
     platform: Option<String>,
+    reachable: bool,
 }
 
 pub fn start(app: AppHandle) {
@@ -63,6 +67,7 @@ async fn run_discovery(app: AppHandle) -> Result<(), String> {
     let mut interval = time::interval(Duration::from_millis(900));
     let mut buffer = [0_u8; 512];
     let mut last_peer: Option<(String, Instant)> = None;
+    let mut probe_cache: HashMap<Ipv4Addr, (Instant, bool)> = HashMap::new();
 
     loop {
         tokio::select! {
@@ -104,6 +109,12 @@ async fn run_discovery(app: AppHandle) -> Result<(), String> {
                 }
                 last_peer = Some((dedupe_key, Instant::now()));
 
+                // The peer is announcing over UDP, so its app is running — but
+                // its signaling port can still be firewall-blocked. Report the
+                // real TCP reachability so the UI can be honest about it.
+                let reachable =
+                    probe_signaling_cached(&mut probe_cache, remote_ip).await;
+
                 let _ = app.emit(
                     "kuno:auto-connect",
                     AutoConnectPayload {
@@ -114,11 +125,35 @@ async fn run_discovery(app: AppHandle) -> Result<(), String> {
                         source: "lan".to_string(),
                         device_name: message.device_name,
                         platform: message.platform,
+                        reachable,
                     },
                 );
             }
         }
     }
+}
+
+async fn probe_signaling_cached(
+    cache: &mut HashMap<Ipv4Addr, (Instant, bool)>,
+    remote_ip: Ipv4Addr,
+) -> bool {
+    let now = Instant::now();
+    if let Some((checked_at, reachable)) = cache.get(&remote_ip) {
+        if now.duration_since(*checked_at) < PROBE_CACHE_TTL {
+            return *reachable;
+        }
+    }
+    let reachable = matches!(
+        time::timeout(
+            PROBE_TIMEOUT,
+            TcpStream::connect((IpAddr::V4(remote_ip), SIGNALING_PORT))
+        )
+        .await,
+        Ok(Ok(_))
+    );
+    cache.retain(|_, (checked_at, _)| now.duration_since(*checked_at) < PROBE_CACHE_TTL * 4);
+    cache.insert(remote_ip, (now, reachable));
+    reachable
 }
 
 fn should_emit_peer(last_peer: &Option<(String, Instant)>, dedupe_key: &str, now: Instant) -> bool {
@@ -224,6 +259,15 @@ mod tests {
     }
 
     #[test]
+    fn room_id_for_pair_known_vector() {
+        // Locks cross-language parity with the TypeScript port in
+        // src/features/realtime/pairing.ts (roomIdForPair). If either side's
+        // FNV implementation drifts, one of these assertions breaks.
+        assert_eq!(room_id_for_pair("left", "right"), "943954");
+        assert_eq!(room_id_for_pair("peer_a", "peer_b"), "345804");
+    }
+
+    #[test]
     fn discovery_message_serializes_camel_case() {
         let message = DiscoveryMessage {
             app: "KunoChat".to_string(),
@@ -253,6 +297,7 @@ mod tests {
             source: "lan".to_string(),
             device_name: Some("workstation".to_string()),
             platform: Some("windows".to_string()),
+            reachable: true,
         };
         let value = serde_json::to_value(payload).expect("serialize");
         assert_eq!(
@@ -264,7 +309,8 @@ mod tests {
                 "peerHint": "127.0.0.2",
                 "source": "lan",
                 "deviceName": "workstation",
-                "platform": "windows"
+                "platform": "windows",
+                "reachable": true
             })
         );
     }

@@ -4,16 +4,21 @@ import { Composer } from "../components/Composer";
 import { DropOverlay } from "../components/DropOverlay";
 import { Header } from "../components/Header";
 import { MessageList } from "../components/MessageList";
+import { DiagnosticsPanel } from "../components/DiagnosticsPanel";
 import { PairingScreen } from "../components/PairingScreen";
 import { SettingsScreen } from "../components/SettingsScreen";
 import { WindowShell } from "../components/WindowShell";
 import { HistoryTab } from "../components/HistoryTab";
-import { DEFAULT_CONVERSATION_ID, useChatStore } from "../features/chat/chatStore";
+import { DEFAULT_CONVERSATION_ID, selectPendingConnectionMessages, useChatStore } from "../features/chat/chatStore";
 import { runtimeConfig } from "../features/config/runtimeConfig";
 import type { ChatMessage, ConnectionStatus, ConversationSummary, DraftAttachment, TrustedPeer } from "../features/chat/messageTypes";
 import { platformAdapter, type DurableTransferSession } from "../features/native/platformAdapter";
 import { realtimeClient } from "../features/realtime/realtimeClient";
-import type { RealtimeAssetMeta, RealtimeBinarySource } from "../features/realtime/realtimeTypes";
+import type { RealtimeAssetMeta, RealtimeBinarySource, RealtimeConnectOptions } from "../features/realtime/realtimeTypes";
+import { roleForPair, roomIdForPair } from "../features/realtime/pairing";
+import { createConnectGuard } from "../features/chat/connectGuard";
+import { isTailscaleAddress } from "../features/net/address";
+import { peerReachabilitySummary } from "../features/diagnostics/diagnosticsService";
 import { parseClipboardItems } from "../features/sendables/clipboardParser";
 import { parseDroppedFiles } from "../features/sendables/dropParser";
 import { sha256ArrayBuffer, sha256ForAsset } from "../features/transfer/hash";
@@ -28,10 +33,13 @@ type AutoConnectPayload = {
   source?: "lan" | "tailscale";
   deviceName?: string;
   platform?: string;
+  /** false = the peer's device is online but its KunoChat port did not answer. */
+  reachable?: boolean;
 };
 
 const LOCAL_BROWSER_SIGNALING_URL = "browser-local";
 const CONNECTION_ATTEMPT_TIMEOUT_MS = 16_000;
+const BACKGROUND_RECONNECT_INTERVAL_MS = 20_000;
 
 export type DetectedPeer = AutoConnectPayload & {
   id: string;
@@ -96,12 +104,20 @@ type ConnectionRequestPayload = {
   requesterName: string;
   requesterPeerId: string;
   peerHint: string;
+  requesterRole?: "host" | "join" | null;
 };
 
 type ConnectionDiagnostic = {
   tone: "info" | "warning" | "danger";
   title: string;
   detail: string;
+  /** Skip auto-wait sanitization; the detail is already user-actionable. */
+  sticky?: boolean;
+};
+
+type ConnectionFailure = {
+  reason: string;
+  at: number;
 };
 
 export function App() {
@@ -123,6 +139,8 @@ export function App() {
     selectConversation,
     activateConversation,
     setConversationTrustedPeer,
+    setConversationStablePeerId,
+    adoptConversationIdentity,
     clearUnread,
     setPeerTyping,
     markMessageStatus,
@@ -152,14 +170,16 @@ export function App() {
   const recoverySessionsRef = useRef<DurableTransferSession[]>([]);
   const incomingRequestsRef = useRef(new Set<string>());
   const pendingDeliveryIdsRef = useRef(new Set<string>());
-  const autoConnectInFlightRef = useRef<string>();
-  const autoConnectAttemptAtRef = useRef(new Map<string, number>());
+  const connectGuardRef = useRef(createConnectGuard());
+  const boundConversationIdRef = useRef<string>();
+  const lastAutoConnectRef = useRef<AutoConnectPayload>();
   const typingStopTimerRef = useRef<number>();
   const connectionTimeoutRef = useRef<number>();
   const settingsRef = useRef(settings);
   const windowFocusedRef = useRef(typeof document === "undefined" ? true : document.hasFocus());
   const unreadEpochRef = useRef(0);
   const [diagnostic, setDiagnostic] = useState<ConnectionDiagnostic>();
+  const [lastConnectionFailure, setLastConnectionFailure] = useState<ConnectionFailure>();
   const [lastAutoConnect, setLastAutoConnect] = useState<AutoConnectPayload>();
   const [detectedPeers, setDetectedPeers] = useState<DetectedPeer[]>([]);
   const [connectionRequest, setConnectionRequest] = useState<ConnectionRequestPayload>();
@@ -178,6 +198,13 @@ export function App() {
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
+
+  // Keep a ref copy of lastAutoConnect so the once-registered connection-request
+  // listener (autoAcceptConnectionRequest) reads the current value, not a stale
+  // closure snapshot.
+  useEffect(() => {
+    lastAutoConnectRef.current = lastAutoConnect;
+  }, [lastAutoConnect]);
 
   useEffect(() => {
     void platformAdapter.setAlwaysOnTop(settings.alwaysOnTop).catch(() => undefined);
@@ -284,6 +311,22 @@ export function App() {
     }
   }, [currentView, activeConversationId, connectionStatus, conversations]);
 
+  // Background reconnect worker: while a known conversation is offline, keep
+  // retrying its route on a slow cadence so recovery does not depend on the
+  // user focusing the window or pressing a button.
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      const state = useChatStore.getState();
+      if (state.currentView !== "main" && state.currentView !== "mini") {
+        return;
+      }
+      if (state.connectionStatus === "offline" || state.connectionStatus === "failed" || state.connectionStatus === "pairing") {
+        ensureActiveConversationConnection("resume");
+      }
+    }, BACKGROUND_RECONNECT_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     realtimeClient.configure({
       onStatus: (status) => {
@@ -333,12 +376,19 @@ export function App() {
           });
           return;
         }
+        const boundConversationId = boundConversationIdRef.current ?? useChatStore.getState().activeConversationId;
         const trustedPeer: TrustedPeer = {
           publicKey: identity.publicKey,
           fingerprint: identity.fingerprint,
           verifiedAt: Date.now()
         };
-        setConversationTrustedPeer(useChatStore.getState().activeConversationId, trustedPeer);
+        setConversationTrustedPeer(boundConversationId, trustedPeer);
+        // Learn the peer's stable id so future reconnects derive a deterministic
+        // room even if their IP changes, and fold any split IP-keyed tabs into one.
+        if (identity.stablePeerId) {
+          setConversationStablePeerId(boundConversationId, identity.stablePeerId);
+        }
+        adoptConversationIdentity(boundConversationId, trustedPeer);
       },
       onText: (input) => {
         if (useChatStore.getState().messages.some((message) => message.id === input.id)) {
@@ -420,6 +470,7 @@ export function App() {
       onError: (message) => {
         setConnectionStatus("failed");
         markInterruptedTransfers(connectionHelpText(message));
+        recordConnectionFailure(message);
         setDiagnostic({
           tone: "danger",
           title: "接続できません",
@@ -448,6 +499,7 @@ export function App() {
       }
       setConnectionStatus("failed");
       markInterruptedTransfers("接続が時間切れになりました。相手を選び直すか、もう一度接続してください。");
+      recordConnectionFailure("接続が時間切れになりました。");
       setDiagnostic({
         tone: "danger",
         title: "接続が完了しません",
@@ -499,7 +551,7 @@ export function App() {
       return;
     }
 
-    void realtimeClient.connect({
+    void connectRealtime(useChatStore.getState().activeConversationId, {
       roomId: pairingCode,
       localPeerId: sessionPeerId,
       displayName: settings.displayName || "You",
@@ -760,6 +812,10 @@ export function App() {
     setView("pairing");
   }
 
+  function recordConnectionFailure(reason: string) {
+    setLastConnectionFailure({ reason, at: Date.now() });
+  }
+
   function markUnreadAsRead() {
     unreadEpochRef.current += 1;
     if (useChatStore.getState().unreadCount > 0) {
@@ -776,6 +832,17 @@ export function App() {
     return state.conversations.find((conversation) => conversation.id === conversationId)?.trustedPeer ?? state.settings.trustedPeer;
   }
 
+  // Every realtimeClient.connect goes through here so we always record which
+  // conversation this transport belongs to (C-5: flush only that conversation's
+  // queued messages) and always advertise our stable peer id (C-1/C-3).
+  function connectRealtime(conversationId: string, options: Omit<RealtimeConnectOptions, "stableLocalPeerId">) {
+    boundConversationIdRef.current = conversationId;
+    return realtimeClient.connect({
+      ...options,
+      stableLocalPeerId: useChatStore.getState().settings.localPeerId
+    });
+  }
+
   function ensureActiveConversationConnection(reason: "open" | "resume" | "select" | "send", force = false): boolean {
     const state = useChatStore.getState();
     if (state.connectionStatus === "connected" || state.connectionStatus === "connecting" || state.connectionStatus === "reconnecting") {
@@ -787,18 +854,11 @@ export function App() {
       return false;
     }
 
-    const now = Date.now();
-    const lastAttemptAt = autoConnectAttemptAtRef.current.get(conversation.id) ?? 0;
-    if (!force && (autoConnectInFlightRef.current === conversation.id || now - lastAttemptAt < 8_000)) {
+    if (!connectGuardRef.current.begin(conversation.id, { force })) {
       return true;
     }
-
-    autoConnectInFlightRef.current = conversation.id;
-    autoConnectAttemptAtRef.current.set(conversation.id, now);
     void reconnectConversation(conversation, { automatic: true, reason }).finally(() => {
-      if (autoConnectInFlightRef.current === conversation.id) {
-        autoConnectInFlightRef.current = undefined;
-      }
+      connectGuardRef.current.end(conversation.id);
     });
     return true;
   }
@@ -895,7 +955,7 @@ export function App() {
     if (useChatStore.getState().connectionStatus === "connected") {
       realtimeClient.disconnect();
     }
-    const selectedPeer = lastAutoConnect ?? detectedPeers[0];
+    const selectedPeer = lastAutoConnect ?? detectedPeers.find((peer) => peer.reachable !== false) ?? detectedPeers[0];
     if (!selectedPeer || selectedPeer.signalingUrl === LOCAL_BROWSER_SIGNALING_URL) {
       setConnectionStatus("failed");
       setDiagnostic({
@@ -906,30 +966,28 @@ export function App() {
       setView("pairing");
       return;
     }
-    const detectedPeerUrl = selectedPeer ? signalingUrlForDetectedPeer(selectedPeer) : undefined;
-    if (selectedPeer) {
-      activateConversation({
-        peerId: selectedPeer.peerHint,
-        displayName: selectedPeer.deviceName || selectedPeer.peerHint,
-        peerHint: selectedPeer.peerHint,
-        source: selectedPeer.source,
-        platform: selectedPeer.platform
-      });
-      setLastAutoConnect({
-        ...selectedPeer,
-        roomId: normalizedCode,
-        mode: "join",
-        signalingUrl: detectedPeerUrl ?? selectedPeer.signalingUrl
-      });
-    }
+    const detectedPeerUrl = signalingUrlForDetectedPeer(selectedPeer);
+    const conversationId = activateConversation({
+      peerId: selectedPeer.peerHint,
+      displayName: selectedPeer.deviceName || selectedPeer.peerHint,
+      peerHint: selectedPeer.peerHint,
+      source: selectedPeer.source,
+      platform: selectedPeer.platform
+    });
+    setLastAutoConnect({
+      ...selectedPeer,
+      roomId: normalizedCode,
+      mode: "join",
+      signalingUrl: detectedPeerUrl ?? selectedPeer.signalingUrl
+    });
 
-    void realtimeClient.connect({
+    void connectRealtime(conversationId, {
       roomId: normalizedCode,
       localPeerId: sessionPeerId,
       displayName: settings.displayName || "You",
       mode: "join",
       signalingUrl: detectedPeerUrl,
-      nativeEndpoint: selectedPeer?.signalingUrl === LOCAL_BROWSER_SIGNALING_URL || !selectedPeer?.peerHint ? undefined : nativeEndpointForPeer(selectedPeer.peerHint),
+      nativeEndpoint: selectedPeer.signalingUrl === LOCAL_BROWSER_SIGNALING_URL || !selectedPeer.peerHint ? undefined : nativeEndpointForPeer(selectedPeer.peerHint),
       trustedPeer: trustedPeerForActiveConversation()
     }).catch(() => undefined);
   }
@@ -940,21 +998,17 @@ export function App() {
       return;
     }
     const isLocalBrowserPeer = peer.signalingUrl === LOCAL_BROWSER_SIGNALING_URL;
-    const roomId = isLocalBrowserPeer ? peer.roomId : createPairingCode();
-    const signalingUrl = signalingUrlForDetectedPeer(peer) ?? peer.signalingUrl;
+    // Discovery already computed a symmetric room id + complementary mode on both
+    // machines, so reuse them rather than minting a fresh random room here.
+    const roomId = peer.roomId;
+    const requestUrl = signalingUrlForDetectedPeer(peer) ?? peer.signalingUrl;
     const requestId = crypto.randomUUID();
-    const requestPeer = {
-      ...peer,
-      roomId,
-      mode: "join" as const,
-      signalingUrl
-    };
 
     if (useChatStore.getState().connectionStatus === "connected") {
       realtimeClient.disconnect();
     }
 
-    activateConversation({
+    const conversationId = activateConversation({
       peerId: peer.peerHint,
       displayName: peer.deviceName || peer.peerHint,
       peerHint: peer.peerHint,
@@ -970,52 +1024,66 @@ export function App() {
     setView("main");
 
     if (isLocalBrowserPeer) {
-      setLastAutoConnect(requestPeer);
+      setLastAutoConnect({ ...peer, roomId, mode: "join", signalingUrl: requestUrl });
       setDiagnostic({
         tone: "info",
         title: "接続中",
         detail: `${peer.deviceName || "相手"} に接続しています。`
       });
-      void realtimeClient.connect({
+      void connectRealtime(conversationId, {
         roomId,
         localPeerId: sessionPeerId,
         displayName: settings.displayName || "You",
         mode: "join",
-        signalingUrl,
-        trustedPeer: trustedPeerForConversation(useChatStore.getState().activeConversationId)
+        signalingUrl: requestUrl,
+        trustedPeer: trustedPeerForConversation(conversationId)
       }).catch(() => undefined);
       return;
     }
 
     try {
-      await sendConnectionRequest(signalingUrl, {
+      const ack = await sendConnectionRequest(requestUrl, {
         requestId,
         roomId,
         requesterName: settings.displayName || "You",
-        requesterPeerId: settings.localPeerId
+        requesterPeerId: settings.localPeerId,
+        requesterRole: peer.mode
       });
-      setLastAutoConnect(requestPeer);
+      const mode: "host" | "join" = ack.proto >= 2 ? peer.mode : "join";
+      const connectSignalingUrl = mode === "host" ? runtimeConfig.signalingUrl : requestUrl;
+      setLastAutoConnect({ ...peer, roomId, mode, signalingUrl: connectSignalingUrl });
       setDiagnostic({
         tone: "info",
         title: "承認待ち",
         detail: `${peer.deviceName || peer.peerHint} 側で接続を承認してください。`
       });
-      void realtimeClient.connect({
+      void connectRealtime(conversationId, {
         roomId,
         localPeerId: sessionPeerId,
         displayName: settings.displayName || "You",
-        mode: "join",
-        signalingUrl,
+        mode,
+        signalingUrl: connectSignalingUrl,
         nativeEndpoint: nativeEndpointForPeer(peer.peerHint),
-        trustedPeer: trustedPeerForConversation(useChatStore.getState().activeConversationId)
+        trustedPeer: trustedPeerForConversation(conversationId)
       }).catch(() => undefined);
     } catch (error) {
       setConnectionStatus("failed");
-      setDiagnostic({
-        tone: "danger",
-        title: "接続依頼を送れません",
-        detail: error instanceof Error ? error.message : "相手のKunoChatに接続依頼を送れませんでした。"
-      });
+      recordConnectionFailure(error instanceof Error ? error.message : "接続依頼を送れませんでした。");
+      const unreachableSummary = peer.reachable === false ? peerReachabilitySummary(peer) : undefined;
+      setDiagnostic(
+        unreachableSummary?.guidance
+          ? {
+              tone: "warning",
+              title: "相手のKunoChatが応答していません",
+              detail: unreachableSummary.guidance,
+              sticky: true
+            }
+          : {
+              tone: "danger",
+              title: "接続依頼を送れません",
+              detail: error instanceof Error ? error.message : "相手のKunoChatに接続依頼を送れませんでした。"
+            }
+      );
     }
   }
 
@@ -1027,15 +1095,23 @@ export function App() {
       return;
     }
 
-    void realtimeClient.connect({
+    const conversationId = useChatStore.getState().activeConversationId;
+    // Share the single-flight guard so a manual retry can't race the background
+    // worker or the recovery handlers.
+    if (!connectGuardRef.current.begin(conversationId, { force: true })) {
+      return;
+    }
+    void connectRealtime(conversationId, {
       roomId: payload.roomId,
       localPeerId: sessionPeerId,
       displayName: settings.displayName || "You",
       mode: payload.mode,
       signalingUrl: payload.signalingUrl,
       nativeEndpoint: nativeEndpointForPeer(payload.peerHint),
-      trustedPeer: trustedPeerForConversation(useChatStore.getState().activeConversationId)
-    }).catch(() => undefined);
+      trustedPeer: trustedPeerForConversation(conversationId)
+    })
+      .catch(() => undefined)
+      .finally(() => connectGuardRef.current.end(conversationId));
   }
 
   function handleSelectConversation(conversationId: string) {
@@ -1069,19 +1145,17 @@ export function App() {
       return;
     }
 
-    const roomId = createPairingCode();
-    const signalingUrl = signalingUrlForPeer(conversation.peerHint) ?? runtimeConfig.signalingUrl;
-    const reconnectPayload: AutoConnectPayload = {
-      signalingUrl,
-      roomId,
-      mode: "join",
-      peerHint: conversation.peerHint,
-      source: conversation.source === "tailscale" ? "tailscale" : "lan",
-      deviceName: conversation.displayName,
-      platform: conversation.platform
-    };
+    // Deterministic room/role when we already know the peer's stable id: both
+    // sides derive the same room and complementary host/join roles, so whoever
+    // dials first, they converge (no roomId mismatch / glare stalls).
+    const localStableId = settings.localPeerId;
+    const stableRemote = conversation.stablePeerId;
+    const deterministic = Boolean(stableRemote);
+    const roomId = deterministic ? roomIdForPair(localStableId, stableRemote!) : createPairingCode();
+    const myRole: "host" | "join" = deterministic ? roleForPair(localStableId, stableRemote!) : "join";
+    // The connection-request always goes to the peer's own server.
+    const requestUrl = signalingUrlForPeer(conversation.peerHint) ?? runtimeConfig.signalingUrl;
 
-    setLastAutoConnect(reconnectPayload);
     setConnectionStatus("connecting");
     setDiagnostic({
       tone: "info",
@@ -1090,23 +1164,38 @@ export function App() {
     });
 
     try {
-      await sendConnectionRequest(signalingUrl, {
+      const ack = await sendConnectionRequest(requestUrl, {
         requestId: crypto.randomUUID(),
         roomId,
         requesterName: settings.displayName || "You",
-        requesterPeerId: settings.localPeerId
+        requesterPeerId: settings.localPeerId,
+        requesterRole: deterministic ? myRole : undefined
       });
-      await realtimeClient.connect({
+      // Only take the negotiated role if the peer speaks proto>=2; otherwise fall
+      // back to the legacy "requester joins, acceptor hosts" flow.
+      const mode: "host" | "join" = deterministic && ack.proto >= 2 ? myRole : "join";
+      const connectSignalingUrl = mode === "host" ? runtimeConfig.signalingUrl : requestUrl;
+      setLastAutoConnect({
+        signalingUrl: connectSignalingUrl,
+        roomId,
+        mode,
+        peerHint: conversation.peerHint,
+        source: conversation.source === "tailscale" ? "tailscale" : "lan",
+        deviceName: conversation.displayName,
+        platform: conversation.platform
+      });
+      await connectRealtime(conversation.id, {
         roomId,
         localPeerId: sessionPeerId,
         displayName: settings.displayName || "You",
-        mode: "join",
-        signalingUrl,
+        mode,
+        signalingUrl: connectSignalingUrl,
         nativeEndpoint: nativeEndpointForPeer(conversation.peerHint),
         trustedPeer: trustedPeerForConversation(conversation.id)
       });
     } catch (error) {
       setConnectionStatus(options.automatic ? "offline" : "failed");
+      recordConnectionFailure(error instanceof Error ? error.message : "接続依頼を送れませんでした。");
       setDiagnostic({
         tone: "warning",
         title: options.automatic ? "オフライン" : "未接続",
@@ -1124,23 +1213,46 @@ export function App() {
     if (!sessionPeerId || request.requesterPeerId === currentSettings.localPeerId) {
       return;
     }
-    const source = request.peerHint.startsWith("100.") ? "tailscale" : "lan";
 
-    if (useChatStore.getState().connectionStatus === "connected") {
+    // Glare guard: if we are already dialing/connected to the SAME deterministic
+    // room, this request is the peer's half of a simultaneous auto-dial. Ignore
+    // it so we do not tear down the connection we are already establishing.
+    const status = useChatStore.getState().connectionStatus;
+    const normalizedRequestRoom = request.roomId.replace(/\D/g, "").slice(0, 6);
+    const currentRoom = lastAutoConnectRef.current?.roomId?.replace(/\D/g, "").slice(0, 6);
+    if (
+      (status === "connecting" || status === "reconnecting" || status === "connected") &&
+      currentRoom &&
+      currentRoom === normalizedRequestRoom
+    ) {
+      setConnectionRequest(undefined);
+      return;
+    }
+
+    const source = isTailscaleAddress(request.peerHint) ? "tailscale" : "lan";
+    // Complement the requester's role; absent/legacy request → we host.
+    const mode: "host" | "join" =
+      request.requesterRole === "host" ? "join" : request.requesterRole === "join" ? "host" : "host";
+    const signalingUrl = mode === "host" ? runtimeConfig.signalingUrl : signalingUrlForPeer(request.peerHint) ?? runtimeConfig.signalingUrl;
+
+    if (status === "connected") {
       realtimeClient.disconnect();
     }
 
-    activateConversation({
+    const conversationId = activateConversation({
       peerId: request.requesterPeerId,
       displayName: request.requesterName || "Peer",
       peerHint: request.peerHint,
       source
     });
+    // Remember the requester's stable id so our next reconnect derives the same
+    // deterministic room even before identity-hello completes.
+    setConversationStablePeerId(conversationId, request.requesterPeerId);
     setConnectionRequest(undefined);
     setLastAutoConnect({
-      signalingUrl: runtimeConfig.signalingUrl,
+      signalingUrl,
       roomId: request.roomId,
-      mode: "host",
+      mode,
       peerHint: request.peerHint,
       source,
       deviceName: request.requesterName
@@ -1150,12 +1262,12 @@ export function App() {
       title: "接続しました",
       detail: `${request.requesterName || "相手"} と接続しています。`
     });
-    void realtimeClient.connect({
+    void connectRealtime(conversationId, {
       roomId: request.roomId,
       localPeerId: sessionPeerId,
       displayName: settings.displayName || "You",
-      mode: "host",
-      signalingUrl: runtimeConfig.signalingUrl,
+      mode,
+      signalingUrl,
       nativeEndpoint: nativeEndpointForPeer(request.peerHint),
       trustedPeer: trustedPeerForActiveConversation()
     }).catch(() => undefined);
@@ -1191,7 +1303,27 @@ export function App() {
   const hasKnownAutoRecipient = Boolean(activeConversation?.peerHint || activeConversation?.trustedPeer || lastAutoConnectMatchesActive);
   const passiveAutoDiagnostic =
     !diagnostic || diagnostic.title === "自動接続待機中" || diagnostic.title === "オフライン" || diagnostic.title === "未接続";
-  const showConnectionBanner = connectionStatus !== "connected" && (!hasKnownAutoRecipient || !passiveAutoDiagnostic);
+  // Honest presence: the peer's device answers discovery but its KunoChat
+  // port does not. Say so explicitly instead of implying it may come online.
+  const activeDetectedPeer = detectedPeers.find((peer) => peer.peerHint && peer.peerHint === activeConversation?.peerHint);
+  const activePeerAppDown = Boolean(
+    connectionStatus !== "connected" &&
+      connectionStatus !== "connecting" &&
+      connectionStatus !== "reconnecting" &&
+      activeDetectedPeer &&
+      activeDetectedPeer.reachable === false
+  );
+  const activePeerAppDownDiagnostic: ConnectionDiagnostic | undefined =
+    activePeerAppDown && activeDetectedPeer
+      ? {
+          tone: "warning",
+          title: "相手のKunoChatが応答していません",
+          detail: peerReachabilitySummary(activeDetectedPeer).guidance ?? "",
+          sticky: true
+        }
+      : undefined;
+  const showConnectionBanner =
+    connectionStatus !== "connected" && (activePeerAppDown || !hasKnownAutoRecipient || !passiveAutoDiagnostic);
 
   function handleDraftChange(value: string) {
     setDraftText(value);
@@ -1249,14 +1381,16 @@ export function App() {
   }
 
   async function flushPendingConnectionMessages() {
+    // Guard against a status flip mid-flush; only flush when the transport is
+    // actually ready to carry messages to the bound peer.
+    if (!realtimeClient.isReady()) {
+      return;
+    }
     const state = useChatStore.getState();
-    const pendingMessages = state.messages.filter(
-      (message) =>
-        message.sender === "me" &&
-        message.status === "queued" &&
-        message.error?.code === "pending_connection" &&
-        (message.conversationId ?? DEFAULT_CONVERSATION_ID) === state.activeConversationId
-    );
+    // Flush only the conversation this connection belongs to, NOT the active tab
+    // and NOT all conversations (either could misdeliver to the wrong peer).
+    const boundConversationId = boundConversationIdRef.current ?? state.activeConversationId;
+    const pendingMessages = selectPendingConnectionMessages(state.messages, boundConversationId);
 
     for (const message of pendingMessages) {
       if (pendingDeliveryIdsRef.current.has(message.id)) {
@@ -1336,6 +1470,26 @@ export function App() {
           onPickSaveFolder={handlePickSaveFolder}
           onClearHistory={clearHistory}
           onForgetPeer={handleForgetPeer}
+          onOpenDiagnostics={() => setView("diagnostics")}
+        />
+      ) : null}
+
+      {currentView === "diagnostics" ? (
+        <DiagnosticsPanel
+          connectionContext={{
+            lastCandidate: lastAutoConnect
+              ? {
+                  deviceName: lastAutoConnect.deviceName,
+                  peerHint: lastAutoConnect.peerHint,
+                  source: lastAutoConnect.source,
+                  signalingUrl: lastAutoConnect.signalingUrl,
+                  reachable: lastAutoConnect.reachable
+                }
+              : undefined,
+            lastFailure: lastConnectionFailure
+          }}
+          defaultProbeHost={activeConversation?.peerHint ?? lastAutoConnect?.peerHint}
+          onClose={() => setView("main")}
         />
       ) : null}
 
@@ -1370,13 +1524,14 @@ export function App() {
           />
           {showConnectionBanner ? (
             <ConnectionBanner
-              diagnostic={diagnostic}
+              diagnostic={activePeerAppDownDiagnostic ?? diagnostic}
               status={connectionStatus}
               canRetry={Boolean(lastAutoConnect)}
               autoMode={Boolean(activeConversation?.peerHint || lastAutoConnect)}
               peerName={peerName}
               onPair={() => setView("pairing")}
               onRetry={handleRetryAutoConnect}
+              onDiagnostics={() => setView("diagnostics")}
             />
           ) : null}
           <MessageList
@@ -1629,9 +1784,9 @@ function connectionHelpText(message: string): string {
 
 async function sendConnectionRequest(
   signalingUrl: string,
-  payload: { requestId: string; roomId: string; requesterName: string; requesterPeerId: string }
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
+  payload: { requestId: string; roomId: string; requesterName: string; requesterPeerId: string; requesterRole?: "host" | "join" }
+): Promise<{ proto: number }> {
+  return new Promise<{ proto: number }>((resolve, reject) => {
     const socket = new WebSocket(signalingUrl);
     const timer = window.setTimeout(() => {
       socket.close();
@@ -1642,11 +1797,11 @@ async function sendConnectionRequest(
       socket.send(JSON.stringify({ type: "connection-request", ...payload }));
     };
     socket.onmessage = (event) => {
-      const message = JSON.parse(String(event.data)) as { type?: string; message?: string };
+      const message = JSON.parse(String(event.data)) as { type?: string; message?: string; proto?: number };
       if (message.type === "connection-request-ack") {
         window.clearTimeout(timer);
         socket.close();
-        resolve();
+        resolve({ proto: typeof message.proto === "number" ? message.proto : 1 });
       } else if (message.type === "error") {
         window.clearTimeout(timer);
         socket.close();
@@ -1703,7 +1858,8 @@ function ConnectionBanner({
   autoMode,
   peerName,
   onPair,
-  onRetry
+  onRetry,
+  onDiagnostics
 }: {
   diagnostic?: ConnectionDiagnostic;
   status: ConnectionStatus;
@@ -1712,6 +1868,7 @@ function ConnectionBanner({
   peerName: string;
   onPair: () => void;
   onRetry: () => void;
+  onDiagnostics: () => void;
 }) {
   if (!diagnostic && status === "connected") {
     return null;
@@ -1745,6 +1902,11 @@ function ConnectionBanner({
               前回の相手に再接続
             </button>
           ) : null}
+          {activeDiagnostic.tone !== "info" ? (
+            <button type="button" onClick={onDiagnostics} className="kuno-focus-ring min-h-8 whitespace-nowrap rounded-input bg-white/80 px-2.5 py-1.5 text-[11px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
+              診断
+            </button>
+          ) : null}
           <button type="button" onClick={onPair} className="kuno-focus-ring min-h-8 whitespace-nowrap rounded-input bg-white/80 px-2.5 py-1.5 text-[11px] font-semibold shadow-sm transition-colors hover:bg-white dark:bg-white/10 dark:hover:bg-white/15">
             {autoMode ? "接続先変更" : canRetry ? "別の相手を選ぶ" : "接続先を選ぶ"}
           </button>
@@ -1760,6 +1922,9 @@ function sanitizeConnectionDiagnostic(
   autoMode: boolean,
   peerName: string
 ): ConnectionDiagnostic {
+  if (diagnostic.sticky) {
+    return diagnostic;
+  }
   const technicalDetail = /Cannot reach|signaling server|ws:\/\/|wss:\/\/|timed out|ECONN|ENOTFOUND|NetworkError/i.test(diagnostic.detail);
   if (autoMode && (technicalDetail || status === "failed" || status === "offline" || status === "pairing")) {
     return {

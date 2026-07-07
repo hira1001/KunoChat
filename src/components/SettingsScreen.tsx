@@ -1,4 +1,5 @@
 import {
+  Activity,
   AlertTriangle,
   Bell,
   CheckCircle,
@@ -66,6 +67,7 @@ type SettingsScreenProps = {
   onPickSaveFolder: () => void;
   onClearHistory: () => void;
   onForgetPeer: () => void;
+  onOpenDiagnostics: () => void;
 };
 
 export function SettingsScreen({
@@ -76,7 +78,8 @@ export function SettingsScreen({
   onClose,
   onPickSaveFolder,
   onClearHistory,
-  onForgetPeer
+  onForgetPeer,
+  onOpenDiagnostics
 }: SettingsScreenProps) {
   const isDark = settings.theme === "dark";
   const [currentVersion, setCurrentVersion] = useState("不明");
@@ -261,6 +264,17 @@ export function SettingsScreen({
           <Toggle id="toggle-launch-at-login" icon={<Power className="h-4 w-4" />} label="ログイン時に起動" description="PC起動後すぐ使えるようにします" checked={settings.launchAtLogin} onChange={(value) => onChange({ launchAtLogin: value })} />
           <Toggle id="toggle-notifications" icon={<Bell className="h-4 w-4" />} label="通知" description="新着メッセージをOS通知で知らせます" checked={settings.notifications} onChange={(value) => onChange({ notifications: value })} />
           <Toggle id="toggle-sound" icon={<Volume2 className="h-4 w-4" />} label="サウンド" description="送受信時に通知音を鳴らします" checked={settings.sound} onChange={(value) => onChange({ sound: value })} />
+        </Panel>
+
+        <Panel title="接続">
+          <SettingActionRow
+            icon={<Activity className="h-4 w-4" />}
+            title="ネットワーク診断"
+            description="待受ポート・ファイアウォール・Tailscale・相手への到達性を確認します"
+            action="開く"
+            onClick={onOpenDiagnostics}
+            id="open-diagnostics-btn"
+          />
         </Panel>
 
         <Panel title="ペアリング">

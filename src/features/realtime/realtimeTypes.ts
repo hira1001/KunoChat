@@ -8,6 +8,9 @@ export type RealtimeConnectOptions = {
   signalingUrl?: string;
   nativeEndpoint?: string;
   trustedPeer?: RealtimeTrustedPeer;
+  /** The device's persistent settings.localPeerId, advertised via identity-hello
+   *  so the peer can derive a deterministic reconnect room next time. */
+  stableLocalPeerId?: string;
 };
 
 export type RealtimeTrustedPeer = {
@@ -61,7 +64,7 @@ export type RealtimeControlMessage =
   | { v: 1; type: "asset-cancelled"; id: string; transferId: string; message?: string }
   | { v: 1; type: "asset-pause"; id: string; transferId: string }
   | { v: 1; type: "asset-resume"; id: string; transferId: string }
-  | { v: 1; type: "identity-hello"; senderId: string; publicKey: string; nonce: string }
+  | { v: 1; type: "identity-hello"; senderId: string; publicKey: string; nonce: string; stablePeerId?: string }
   | { v: 1; type: "identity-proof"; senderId: string; publicKey: string; signature: string }
   | { v: 1; type: "typing"; senderId: string; senderName: string; isTyping: boolean; at: number }
   | { v: 1; type: "ping"; at: number }
@@ -75,7 +78,7 @@ export type RealtimePeer = {
 export type RealtimeCallbacks = {
   onStatus: (status: "connecting" | "connected" | "reconnecting" | "offline" | "failed" | "pairing") => void;
   onPeer: (peer: RealtimePeer) => void;
-  onIdentity: (identity: { status: "new" | "trusted" | "mismatch"; publicKey: string; fingerprint: string }) => void;
+  onIdentity: (identity: { status: "new" | "trusted" | "mismatch"; publicKey: string; fingerprint: string; stablePeerId?: string }) => void;
   onText: (payload: RealtimeTextPayload) => void;
   onAssetStart: (asset: RealtimeAssetMeta) => void;
   onAssetProgress: (input: { id: string; transferId: string; progress: number; receivedBytes?: number }) => void;

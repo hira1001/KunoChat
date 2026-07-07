@@ -54,6 +54,8 @@ type ChatStore = {
     fingerprint?: string;
   }) => string;
   setConversationTrustedPeer: (conversationId: string, trustedPeer?: TrustedPeer) => void;
+  setConversationStablePeerId: (conversationId: string, stablePeerId: string) => void;
+  adoptConversationIdentity: (conversationId: string, trustedPeer: TrustedPeer) => string;
   incrementUnread: () => void;
   clearUnread: () => void;
   setPeerTyping: (isTyping: boolean, at?: number) => void;
@@ -97,6 +99,19 @@ type ChatStore = {
 };
 
 export const DEFAULT_CONVERSATION_ID = "conversation_default";
+
+// Messages queued while offline that must auto-send once a connection is up.
+// Scoped to a single conversation so a connection to peer A never flushes
+// messages addressed to peer B (misdelivery). Pure for testability.
+export function selectPendingConnectionMessages(messages: ChatMessage[], conversationId: string): ChatMessage[] {
+  return messages.filter(
+    (message) =>
+      message.sender === "me" &&
+      message.status === "queued" &&
+      message.error?.code === "pending_connection" &&
+      (message.conversationId ?? DEFAULT_CONVERSATION_ID) === conversationId
+  );
+}
 
 const defaultSettings: KunoSettings = {
   localPeerId: createLocalPeerId(),
@@ -144,7 +159,9 @@ export const useChatStore = create<ChatStore>()(
           connectionStatus,
           conversations: state.conversations.map((conversation) => {
             if (conversation.id === state.activeConversationId) {
-              return { ...conversation, connectionStatus };
+              return connectionStatus === "connected"
+                ? { ...conversation, connectionStatus, lastConnectedAt: Date.now() }
+                : { ...conversation, connectionStatus };
             }
             if (connectionStatus === "connected" || connectionStatus === "connecting" || connectionStatus === "reconnecting") {
               return conversation.connectionStatus === "connected" || conversation.connectionStatus === "connecting" || conversation.connectionStatus === "reconnecting"
@@ -225,6 +242,101 @@ export const useChatStore = create<ChatStore>()(
             conversation.id === conversationId ? { ...conversation, trustedPeer } : conversation
           )
         })),
+      setConversationStablePeerId: (conversationId, stablePeerId) =>
+        set((state) => ({
+          conversations: state.conversations.map((conversation) =>
+            conversation.id === conversationId ? { ...conversation, stablePeerId } : conversation
+          )
+        })),
+      adoptConversationIdentity: (conversationId, trustedPeer) => {
+        // Merge the fingerprint-identified peer's conversation history so that a
+        // single device that reconnects over a different IP (Wi-Fi ⇄ Tailscale,
+        // DHCP change) does not fork into multiple tabs. The pre-existing
+        // conversation carrying this fingerprint is canonical; the freshly
+        // created IP-keyed one is merged INTO it.
+        let mergedTargetId = conversationId;
+        set((state) => {
+          const current = state.conversations.find((conversation) => conversation.id === conversationId);
+          if (!current) {
+            return {};
+          }
+          const canonical = state.conversations.find(
+            (conversation) => conversation.id !== conversationId && conversation.trustedPeer?.fingerprint === trustedPeer.fingerprint
+          );
+
+          if (!canonical) {
+            // First time we learn this fingerprint on this tab: just tag it.
+            return {
+              conversations: state.conversations.map((conversation) =>
+                conversation.id === conversationId
+                  ? { ...conversation, fingerprint: trustedPeer.fingerprint, trustedPeer }
+                  : conversation
+              )
+            };
+          }
+
+          mergedTargetId = canonical.id;
+          const targetId = canonical.id;
+
+          // (a) Re-home messages and outbox records from the split tab.
+          const messages = state.messages.map((message) =>
+            (message.conversationId ?? DEFAULT_CONVERSATION_ID) === conversationId
+              ? { ...message, conversationId: targetId }
+              : message
+          );
+          const deliveryOutbox = state.deliveryOutbox.map((record) =>
+            record.conversationId === conversationId ? { ...record, conversationId: targetId } : record
+          );
+
+          // (b)-(d) Merge summary fields; keep the newest activity, take the
+          // freshly connected identity/route values.
+          const currentIsNewer = (current.lastMessageAt ?? 0) >= (canonical.lastMessageAt ?? 0);
+          const mergedConversation: ConversationSummary = {
+            ...canonical,
+            displayName: current.displayName || canonical.displayName,
+            peerId: current.peerId ?? canonical.peerId,
+            peerHint: current.peerHint ?? canonical.peerHint,
+            source: current.source ?? canonical.source,
+            platform: current.platform ?? canonical.platform,
+            stablePeerId: current.stablePeerId ?? canonical.stablePeerId,
+            fingerprint: trustedPeer.fingerprint,
+            trustedPeer,
+            unreadCount: (canonical.unreadCount ?? 0) + (current.unreadCount ?? 0),
+            lastMessageAt: currentIsNewer ? current.lastMessageAt : canonical.lastMessageAt,
+            lastMessagePreview: currentIsNewer ? current.lastMessagePreview : canonical.lastMessagePreview,
+            lastConnectedAt: current.lastConnectedAt ?? canonical.lastConnectedAt,
+            connectionStatus: current.connectionStatus ?? canonical.connectionStatus
+          };
+          const conversations = state.conversations
+            .filter((conversation) => conversation.id !== conversationId)
+            .map((conversation) => (conversation.id === targetId ? mergedConversation : conversation));
+
+          // (e)-(f) Fold the split tab's draft into the canonical one, drop it.
+          const currentDraft = state.conversationDrafts[conversationId];
+          const targetDraft = state.conversationDrafts[targetId];
+          const mergedDraftText = [targetDraft?.draftText, currentDraft?.draftText].filter(Boolean).join("\n").trim();
+          const mergedAttachments = [...(targetDraft?.attachments ?? []), ...(currentDraft?.attachments ?? [])];
+          const conversationDrafts = { ...state.conversationDrafts };
+          delete conversationDrafts[conversationId];
+          conversationDrafts[targetId] = { draftText: mergedDraftText, attachments: mergedAttachments };
+
+          // (g) Follow the merge if the split tab was active.
+          const activeConversationId = state.activeConversationId === conversationId ? targetId : state.activeConversationId;
+          const activeDraft = conversationDrafts[activeConversationId] ?? { draftText: "", attachments: [] };
+
+          return {
+            messages,
+            deliveryOutbox,
+            conversations,
+            conversationDrafts,
+            activeConversationId,
+            draftText: activeConversationId === targetId ? mergedDraftText : activeDraft.draftText,
+            attachments: activeConversationId === targetId ? mergedAttachments : activeDraft.attachments,
+            unreadCount: totalUnread(conversations)
+          };
+        });
+        return mergedTargetId;
+      },
       incrementUnread: () => set((state) => ({ unreadCount: Math.min(state.unreadCount + 1, 99) })),
       clearUnread: () =>
         set((state) => {

@@ -330,7 +330,7 @@ export function App() {
     if (currentView === "main") {
       runAutoConnectTick("open");
     }
-  }, [currentView, activeConversationId, connectionStatus, conversations]);
+  }, [currentView, activeConversationId, conversations]);
 
   // Background reconnect worker: while offline, keep the auto-connect engine
   // ticking on a slow cadence so recovery does not depend on the user focusing

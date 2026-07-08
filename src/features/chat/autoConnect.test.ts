@@ -116,19 +116,13 @@ describe("selectAutoSwitchTarget", () => {
     expect(selectAutoSwitchTarget(conversations, peers, NOW)).toBeUndefined();
   });
 
-  it("switch_target_falls_back_to_most_recent_known_when_nothing_detected", () => {
+  it("switch_target_returns_undefined_when_nothing_detected", () => {
     const conversations = [
       conversation({ id: "a", displayName: "A", peerHint: "1.1.1.1", lastConnectedAt: NOW - 10_000 }),
       conversation({ id: "b", displayName: "B", peerHint: "2.2.2.2", lastConnectedAt: NOW - 1_000 })
     ];
     const result = selectAutoSwitchTarget(conversations, [], NOW);
-    expect(result?.conversation.id).toBe("b");
-    expect(result?.matchedPeer).toBeUndefined();
-  });
-
-  it("switch_target_excludes_stale_fallback", () => {
-    const conversations = [conversation({ id: "old", displayName: "Old", peerHint: "1.1.1.1", lastConnectedAt: NOW - (31 * 24 * 60 * 60 * 1000) })];
-    expect(selectAutoSwitchTarget(conversations, [], NOW)).toBeUndefined();
+    expect(result).toBeUndefined();
   });
 
   it("switch_target_returns_undefined_with_no_candidates", () => {

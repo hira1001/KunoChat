@@ -116,16 +116,7 @@ export function selectAutoSwitchTarget(
     return matched.length === 1 ? matched[0] : undefined;
   }
 
-  // (3) Nothing detected: fall back to the most recently connected known
-  // conversation, but only if it is not stale.
-  const recent = known
-    .filter((conversation) => now - (conversation.lastConnectedAt ?? 0) <= KNOWN_PEER_STALE_MS)
-    .filter((conversation) => typeof conversation.lastConnectedAt === "number");
-  if (recent.length === 0) {
-    return undefined;
-  }
-  const best = recent.reduce((top, conversation) =>
-    (conversation.lastConnectedAt ?? 0) > (top.lastConnectedAt ?? 0) ? conversation : top
-  );
-  return { conversation: best };
+  // (3) Nothing detected: do not auto-connect or auto-switch to avoid infinite
+  // connection loops to offline peers.
+  return undefined;
 }
